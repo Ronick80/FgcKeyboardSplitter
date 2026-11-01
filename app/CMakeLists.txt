@@ -24,7 +24,8 @@ add_executable(FgcApp WIN32
     src/ui.cpp
     src/ui.h
 )
-target_link_libraries(FgcApp PRIVATE FgcCore imgui)
+target_link_libraries(FgcApp PRIVATE FgcCore imgui fgc_version)
+fgc_add_version_resource(FgcApp VFT_APP "FgcApp.exe" "${FGC_PROJECT_NAME}")
 target_compile_options(FgcApp PRIVATE /W4 /permissive- /utf-8)
 
 # The Drivers section of the UI points at this folder.

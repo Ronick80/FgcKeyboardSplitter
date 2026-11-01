@@ -16,7 +16,8 @@
  *  - [lock-free] Safe from any thread, concurrently with everything else, never blocks.
  *  - [create]    Not safe to call concurrently with any other call on the same context.
  *
- * API stability: version 1 is provisional until milestone 6 completes.
+ * API stability: version 1 is stable from release 1.0.0. Later releases add functions and append struct fields
+ * (guarded by struct_size) without changing what exists.
  */
 #ifndef FGC_CORE_H
 #define FGC_CORE_H
@@ -158,6 +159,8 @@ typedef struct FgcLatencyStats {
 
 /* Lifetime */
 
+/* [lock-free] Product version, for example "1.0.0". Static UTF-8 string owned by the library. */
+FGC_API const char* fgc_get_version(void);
 /* [lock-free] */
 FGC_API uint32_t fgc_get_api_version(void);
 /* [create] Creates a context. Destroy it with fgc_destroy. */

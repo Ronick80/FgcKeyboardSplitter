@@ -15,6 +15,7 @@
 #include "backends/interception_keyboard.h"
 #include "backends/scpvbus_pad.h"
 #include "context.h"
+#include "fgc_version.h"
 #include "engine/controller_limit.h"
 
 namespace {
@@ -153,6 +154,10 @@ void stopWatchdog(FgcContext& context) {
 }  // namespace
 
 extern "C" {
+
+FGC_API const char* fgc_get_version(void) {
+    return FGC_VERSION_STRING;
+}
 
 FGC_API uint32_t fgc_get_api_version(void) {
     return FGC_API_VERSION;

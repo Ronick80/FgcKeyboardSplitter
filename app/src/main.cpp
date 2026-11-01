@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include "fgc_core.h"
+#include "fgc_version.h"
 #include "imgui.h"
 #include "imgui_impl_dx11.h"
 #include "imgui_impl_win32.h"
@@ -118,7 +119,7 @@ LRESULT WINAPI windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     FgcContext* core = nullptr;
     if (fgc_create(&core) != FGC_OK) {
-        MessageBoxW(nullptr, L"Failed to initialize FgcCore.", L"FGC Keyboard Splitter", MB_ICONERROR);
+        MessageBoxW(nullptr, L"Failed to initialize FgcCore.", L"" FGC_PROJECT_NAME, MB_ICONERROR);
         return 1;
     }
 
@@ -128,7 +129,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     WNDCLASSEXW windowClass = {sizeof(windowClass), CS_CLASSDC, windowProc, 0, 0, instance,
                                nullptr, nullptr, nullptr, nullptr, L"FgcSplitterWindow", nullptr};
     RegisterClassExW(&windowClass);
-    const HWND hwnd = CreateWindowW(windowClass.lpszClassName, L"FGC Keyboard Splitter", WS_OVERLAPPEDWINDOW, 100, 100,
+    const HWND hwnd = CreateWindowW(windowClass.lpszClassName, L"" FGC_PROJECT_NAME " " FGC_VERSION_STRING,
+                                    WS_OVERLAPPEDWINDOW, 100, 100,
                                     static_cast<int>(800 * dpiScale), static_cast<int>(960 * dpiScale), nullptr,
                                     nullptr, instance, nullptr);
 

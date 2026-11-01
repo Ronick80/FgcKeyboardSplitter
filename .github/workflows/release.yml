@@ -1,0 +1,54 @@
+name: Release
+
+# Pushing a tag like v1.0.0 builds the app and publishes a GitHub release with the zip attached.
+# The version comes from name-version.txt; the tag must match it. "Run workflow" on the Actions tab
+# does the same for the current branch and creates the tag for you.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read name and version from name-version.txt
+        id: version
+        shell: pwsh
+        run: |
+          $lines = Get-Content name-version.txt
+          $version = $lines[1].Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Version '$version' in name-version.txt must look like 1.2.3" }
+          "name=$($lines[0].Trim())" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Check the tag matches the version
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $expected = "v${{ steps.version.outputs.version }}"
+          if ($env:GITHUB_REF_NAME -ne $expected) { throw "Tag $env:GITHUB_REF_NAME does not match name-version.txt (expected $expected)" }
+
+      - name: Configure
+        run: cmake --preset default
+
+      - name: Build
+        run: cmake --build --preset release
+
+      - name: Package
+        run: cmake --build build --config Release --target package
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.name }} ${{ steps.version.outputs.version }}
+          body: |
+            Windows x64. Needs the Interception and ScpVBus drivers; see the README for installation.
+          generate_release_notes: true
+          files: build/FgcKeyboardSplitter-${{ steps.version.outputs.version }}-win-x64.zip

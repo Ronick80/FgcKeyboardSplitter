@@ -7,6 +7,7 @@
 #include <initializer_list>
 
 #include "imgui.h"
+#include "fgc_version.h"
 
 namespace {
 
@@ -343,7 +344,7 @@ void AppUi::draw() {
     ImGui::SetNextWindowSize(viewport->WorkSize);
     constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus;
-    if (ImGui::Begin("FGC Keyboard Splitter", nullptr, flags)) {
+    if (ImGui::Begin(FGC_PROJECT_NAME, nullptr, flags)) {
         drawStatusBar();
         for (size_t i = 0; i < notices_.size();) {
             ImGui::PushID(static_cast<int>(i));
@@ -392,6 +393,7 @@ void AppUi::refreshLimit() {
 }
 
 void AppUi::drawStatusBar() {
+    ImGui::TextColored(kGrey, "%s v%s", FGC_PROJECT_NAME, FGC_VERSION_STRING);
     ImGui::TextUnformatted("Mapping:");
     ImGui::SameLine();
     if (status_.running_sessions > 0) {

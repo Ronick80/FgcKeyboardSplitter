@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "fgc_core.h"
+#include "fgc_version.h"
 
 namespace {
 
@@ -62,6 +63,7 @@ std::vector<FgcKeyboardInfo> listKeyboards(FgcContext* core) {
 void printUsage() {
     std::puts(
         "usage:\n"
+        "  FgcCli version\n"
         "  FgcCli list\n"
         "      Show connected keyboards and driver status.\n"
         "  FgcCli run <index|hardware-id> [seconds]\n"
@@ -157,6 +159,9 @@ int main(int argc, char** argv) {
     int result = 2;
     if (std::strcmp(argv[1], "list") == 0) {
         result = list(core);
+    } else if (std::strcmp(argv[1], "version") == 0 || std::strcmp(argv[1], "--version") == 0) {
+        std::printf("%s %s\n", FGC_PROJECT_NAME, fgc_get_version());
+        result = 0;
     } else if (std::strcmp(argv[1], "run") == 0 && argc >= 3) {
         result = run(core, argv[2], argc >= 4 ? std::atoi(argv[3]) : 0);
     } else {

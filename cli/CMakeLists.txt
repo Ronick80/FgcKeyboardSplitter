@@ -1,4 +1,5 @@
 add_executable(FgcCli main.cpp)
-target_link_libraries(FgcCli PRIVATE FgcCore)
+target_link_libraries(FgcCli PRIVATE FgcCore fgc_version)
+fgc_add_version_resource(FgcCli VFT_APP "FgcCli.exe" "${FGC_PROJECT_NAME} command line")
 target_compile_definitions(FgcCli PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(FgcCli PRIVATE /W4 /permissive- /utf-8)

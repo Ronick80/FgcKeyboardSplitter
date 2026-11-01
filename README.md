@@ -117,9 +117,33 @@ FgcCli run <index|hardware-id> 30 # run one keyboard for 30 seconds (omit the nu
 - **A key seems stuck in other programs after Stop:** the app sends key-up events for any key still held when a
   keyboard stops; pressing and releasing the key once also clears it.
 
+## Versions and releases
+
+`name-version.txt` holds the product name on line 1 and the version (`MAJOR.MINOR.PATCH`) on line 2. CMake reads
+it and uses it for the version shown in the app and `FgcCli version`, the version resource of every binary
+(Properties > Details), the package file name, and the GitHub release.
+
+To make a package locally: `cmake --build build --config Release --target package` produces
+`build\FgcKeyboardSplitter-<version>-win-x64.zip`.
+
+To publish a release:
+
+1. Edit the version in `name-version.txt` and commit it.
+2. Tag that commit and push the tag:
+   ```powershell
+   git tag v1.0.0
+   git push origin v1.0.0
+   ```
+3. The **Release** workflow (`.github/workflows/release.yml`) builds on GitHub, checks the tag matches
+   `name-version.txt`, and publishes the release with the zip attached. You can also start it from the repository's
+   Actions tab with "Run workflow", which creates the tag for you.
+
 ## Project layout
 
 ```
+name-version.txt  Product name and version
+cmake/            Templates for the generated version header and resources
+.github/          Release workflow
 core/      FgcCore.dll: keyboard and virtual-pad backends, mapping threads, profiles, public C API
 app/       FgcApp.exe: Dear ImGui front end, uses only core/include/fgc_core.h
 cli/       FgcCli.exe: command-line front end
