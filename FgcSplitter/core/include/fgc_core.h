@@ -130,10 +130,12 @@ typedef struct FgcStatus {
     uint32_t running_sessions;
 } FgcStatus;
 
+/* Both events mean the keyboard's session already ended: the virtual pad was neutralized and released and
+ * the keyboard handed back to Windows. Calling fgc_start again resumes it. */
 typedef enum FgcEventType {
     FGC_EVENT_NONE = 0,
-    FGC_EVENT_KEYBOARD_DISCONNECTED = 1,
-    FGC_EVENT_SESSION_FAULTED = 2
+    FGC_EVENT_KEYBOARD_DISCONNECTED = 1, /* the keyboard was unplugged */
+    FGC_EVENT_SESSION_FAULTED = 2        /* contact with the keyboard driver was lost */
 } FgcEventType;
 
 typedef struct FgcEvent {

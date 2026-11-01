@@ -1,15 +1,18 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "backends/controller_counter.h"
 #include "backends/keyboard_backend.h"
 #include "backends/pad_backend.h"
+#include "engine/event_queue.h"
 #include "engine/mapping_session.h"
 #include "profiles/profile_store.h"
 
@@ -26,6 +29,13 @@ struct FgcContext {
     std::unique_ptr<fgc::IIdentifySession> identify;
 
     std::atomic<uint32_t> runningSessions{0};
+    fgc::EventQueue events;
+
+    // Checks once a second that running keyboards are still plugged in and clears finished sessions.
+    std::mutex watchdogMutex;
+    std::condition_variable watchdogWake;
+    bool watchdogStop = false;
+    std::thread watchdog;
 
     // Declared last so sessions stop before the counter and backends go away.
     std::map<std::string, std::unique_ptr<fgc::MappingSession>> sessions;

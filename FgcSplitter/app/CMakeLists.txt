@@ -26,3 +26,8 @@ add_executable(FgcApp WIN32
 )
 target_link_libraries(FgcApp PRIVATE FgcCore imgui)
 target_compile_options(FgcApp PRIVATE /W4 /permissive- /utf-8)
+
+# The Drivers section of the UI points at this folder.
+add_custom_command(TARGET FgcApp POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_SOURCE_DIR}/drivers" "$<TARGET_FILE_DIR:FgcApp>/drivers"
+)

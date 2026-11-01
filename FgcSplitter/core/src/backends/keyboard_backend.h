@@ -36,6 +36,13 @@ public:
 
     // Wakes a blocked wait() so its thread can exit.
     virtual void interrupt() noexcept = 0;
+
+    // False once the keyboard has been unplugged or replaced. Callable from any thread while wait() blocks.
+    virtual bool connected() const noexcept = 0;
+
+    // Tells Windows these keys are up. Windows never saw a captured key's press, but a key that was already
+    // down when capture began would otherwise stay stuck down once its release is swallowed.
+    virtual void releaseKeys(const uint16_t* keyCodes, size_t count) noexcept = 0;
 };
 
 // Reports which keyboard produces the next key press. Key presses still reach Windows unchanged.

@@ -20,6 +20,7 @@ add_library(FgcCore SHARED
     src/backends/controller_counter.cpp
     src/engine/controller_limit.h
     src/engine/controller_limit.cpp
+    src/engine/event_queue.h
     src/engine/mapping_session.h
     src/engine/mapping_session.cpp
     src/engine/mapping_table.h

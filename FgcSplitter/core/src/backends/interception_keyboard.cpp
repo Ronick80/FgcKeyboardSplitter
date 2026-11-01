@@ -171,7 +171,9 @@ public:
     }
 
     // Starts capturing: from here on the driver holds this keyboard's strokes for us.
-    FgcResult init(int number) {
+    // expectedHardwareId is what connected() compares the slot against.
+    FgcResult init(int number, std::string expectedHardwareId) {
+        expectedHardwareId_ = std::move(expectedHardwareId);
         DWORD error = 0;
         device_ = openDevice(number, error);
         if (device_ == INVALID_HANDLE_VALUE) {
@@ -236,10 +238,35 @@ public:
         SetEvent(stop_);
     }
 
+    bool connected() const noexcept override {
+        try {
+            // The slot keeps its number but reports no hardware ID (or another one) once the keyboard is gone.
+            return readHardwareId(device_) == expectedHardwareId_;
+        } catch (...) {
+            return true;  // a failed probe must not be mistaken for an unplugged keyboard
+        }
+    }
+
+    void releaseKeys(const uint16_t* keyCodes, size_t count) noexcept override {
+        for (size_t first = 0; first < count; first += kStrokesPerRead) {
+            RawKeyStroke strokes[kStrokesPerRead] = {};
+            const size_t batch = count - first < kStrokesPerRead ? count - first : kStrokesPerRead;
+            for (size_t i = 0; i < batch; ++i) {
+                const uint16_t code = keyCodes[first + i];
+                strokes[i].makeCode = static_cast<USHORT>(code & 0xFFu);
+                strokes[i].flags = static_cast<USHORT>(kStrokeUp | ((code & FGC_KEY_EXTENDED_FLAG) ? kStrokeE0 : 0));
+            }
+            DWORD bytes = 0;
+            DeviceIoControl(device_, kIoctlWrite, strokes, static_cast<DWORD>(batch * sizeof(RawKeyStroke)), nullptr, 0,
+                            &bytes, nullptr);
+        }
+    }
+
 private:
     HANDLE device_ = INVALID_HANDLE_VALUE;
     HANDLE unempty_ = nullptr;  // driver signals it while strokes are queued
     HANDLE stop_ = nullptr;
+    std::string expectedHardwareId_;
     RawKeyStroke strokes_[kStrokesPerRead] = {};
     size_t count_ = 0;
     size_t next_ = 0;
@@ -462,9 +489,11 @@ FgcResult InterceptionKeyboardInput::open(const std::string& hardwareId, std::un
     }
 
     int number = 0;
+    std::string rawHardwareId;
     for (const Known& known : known_) {
         if (known.hardwareId == hardwareId) {
             number = known.deviceNumber;
+            rawHardwareId = known.rawHardwareId;
             break;
         }
     }
@@ -473,7 +502,7 @@ FgcResult InterceptionKeyboardInput::open(const std::string& hardwareId, std::un
     }
 
     auto session = std::make_unique<InterceptionKeyboardSession>();
-    const FgcResult result = session->init(number);
+    const FgcResult result = session->init(number, std::move(rawHardwareId));
     if (result != FGC_OK) {
         return result;
     }

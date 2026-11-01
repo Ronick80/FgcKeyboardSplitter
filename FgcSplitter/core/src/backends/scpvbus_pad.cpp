@@ -5,7 +5,11 @@
 #include <setupapi.h>
 #include <winioctl.h>
 
+#include <atomic>
+#include <cstdlib>
 #include <cstring>
+#include <exception>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -65,6 +69,20 @@ bool unplugSlot(HANDLE bus, uint32_t slot) {
     return DeviceIoControl(bus, kIoctlUnplug, buffer, sizeof(buffer), nullptr, 0, &bytes, nullptr) != FALSE;
 }
 
+// One entry per slot, so a crash handler can neutralize and unplug every live pad.
+struct PadRegistration {
+    std::atomic<HANDLE> bus{nullptr};
+};
+PadRegistration g_registeredPads[kMaxPads];
+
+void registerPad(HANDLE bus, uint32_t slot) {
+    g_registeredPads[slot - 1].bus.store(bus);
+}
+
+void unregisterPad(uint32_t slot) {
+    g_registeredPads[slot - 1].bus.store(nullptr);
+}
+
 // Each pad keeps its own bus handle: synchronous IOCTLs on one handle are serialized, which
 // would couple the latency of separate keyboards.
 class ScpVBusPad final : public IVirtualPad {
@@ -73,9 +91,11 @@ public:
         report_[0] = kReportSize;
         std::memcpy(&report_[4], &slot, sizeof(slot));
         report_[9] = 0x14;  // length of the gamepad payload
+        registerPad(bus, slot);
     }
 
     ~ScpVBusPad() override {
+        unregisterPad(slot_);
         reset();
         unplugSlot(bus_, slot_);
         CloseHandle(bus_);
@@ -101,7 +121,46 @@ private:
     uint8_t feedback_[kFeedbackSize] = {};  // vibration and LED state; the driver requires room for it
 };
 
+// A pad left plugged by a crashed process keeps its last button state and holds its slot, so these
+// handlers neutralize and unplug every live pad.
+LPTOP_LEVEL_EXCEPTION_FILTER g_previousFilter = nullptr;
+
+LONG WINAPI crashFilter(EXCEPTION_POINTERS* info) {
+    releaseAllPadsNow();
+    return g_previousFilter ? g_previousFilter(info) : EXCEPTION_CONTINUE_SEARCH;
+}
+
+void onTerminate() {
+    releaseAllPadsNow();
+    std::abort();
+}
+
+void installCrashHandlers() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        g_previousFilter = SetUnhandledExceptionFilter(crashFilter);
+        std::set_terminate(onTerminate);
+    });
+}
+
 }  // namespace
+
+void releaseAllPadsNow() noexcept {
+    for (uint32_t slot = 1; slot <= kMaxPads; ++slot) {
+        const HANDLE bus = g_registeredPads[slot - 1].bus.exchange(nullptr);
+        if (!bus) {
+            continue;
+        }
+        uint8_t neutral[kReportSize] = {};
+        neutral[0] = kReportSize;
+        std::memcpy(&neutral[4], &slot, sizeof(slot));
+        neutral[9] = 0x14;
+        uint8_t feedback[kFeedbackSize];
+        DWORD bytes = 0;
+        DeviceIoControl(bus, kIoctlReport, neutral, sizeof(neutral), feedback, sizeof(feedback), &bytes, nullptr);
+        unplugSlot(bus, slot);
+    }
+}
 
 bool ScpVBusPadBus::isAvailable() const {
     const HDEVINFO devices =
@@ -121,6 +180,7 @@ FgcResult ScpVBusPadBus::plugIn(std::unique_ptr<IVirtualPad>& out) {
     if (path.empty()) {
         return FGC_ERR_DRIVER_MISSING;
     }
+    installCrashHandlers();
 
     const HANDLE bus = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                    nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);

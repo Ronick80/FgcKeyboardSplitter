@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -121,6 +122,34 @@ bool toKeys(const FgcMapping& mapping, fgc::KeyArray& keys) {
     return true;
 }
 
+constexpr std::chrono::milliseconds kWatchdogInterval{1000};
+
+// Ends sessions whose keyboard was unplugged and clears finished ones, which frees their virtual pad slot.
+void watchdogLoop(FgcContext* context) {
+    std::unique_lock<std::mutex> wait(context->watchdogMutex);
+    while (!context->watchdogWake.wait_for(wait, kWatchdogInterval, [&] { return context->watchdogStop; })) {
+        std::lock_guard<std::mutex> lock(context->controlLock);
+        for (auto it = context->sessions.begin(); it != context->sessions.end();) {
+            fgc::MappingSession& session = *it->second;
+            if (!session.finished() && !session.keyboardConnected()) {
+                session.markDisconnected();
+            }
+            it = session.finished() ? context->sessions.erase(it) : std::next(it);
+        }
+    }
+}
+
+void stopWatchdog(FgcContext& context) {
+    {
+        std::lock_guard<std::mutex> lock(context.watchdogMutex);
+        context.watchdogStop = true;
+    }
+    context.watchdogWake.notify_all();
+    if (context.watchdog.joinable()) {
+        context.watchdog.join();
+    }
+}
+
 }  // namespace
 
 extern "C" {
@@ -139,12 +168,16 @@ FGC_API FgcResult fgc_create(FgcContext** out_context) {
         context->keyboard = std::make_unique<fgc::InterceptionKeyboardInput>();
         context->padBus = std::make_unique<fgc::ScpVBusPadBus>();
         context->counter = std::make_unique<fgc::XInputControllerCounter>();
+        context->watchdog = std::thread(watchdogLoop, context.get());
         *out_context = context.release();
         return FGC_OK;
     });
 }
 
 FGC_API void fgc_destroy(FgcContext* context) {
+    if (context) {
+        stopWatchdog(*context);
+    }
     delete context;
 }
 
@@ -449,7 +482,7 @@ FGC_API FgcResult fgc_start(FgcContext* context, const char* hardware_id) {
         }
 
         auto session = std::make_unique<fgc::MappingSession>(id, std::move(keyboard), std::move(pad),
-                                                             currentKeys(*context, id), context->runningSessions);
+                                                             currentKeys(*context, id), context->runningSessions, context->events);
         session->start();
         context->sessions.emplace(id, std::move(session));
         return FGC_OK;
@@ -494,8 +527,14 @@ FGC_API FgcResult fgc_poll_event(FgcContext* context, FgcEvent* out_event) {
     if (!context || !validStruct(out_event)) {
         return FGC_ERR_INVALID_ARGUMENT;
     }
-    out_event->type = FGC_EVENT_NONE;
-    out_event->hardware_id[0] = '\0';
+    fgc::EventRecord record;
+    if (!context->events.pop(record)) {
+        out_event->type = FGC_EVENT_NONE;
+        out_event->hardware_id[0] = '\0';
+        return FGC_OK;
+    }
+    out_event->type = record.type;
+    copyTruncated(out_event->hardware_id, FGC_HARDWARE_ID_MAX, record.hardwareId);
     return FGC_OK;
 }
 

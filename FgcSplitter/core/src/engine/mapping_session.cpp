@@ -29,11 +29,12 @@ uint32_t inputsHeldFor(const MappingTable& table, const KeyBits& keysDown) {
 
 MappingSession::MappingSession(std::string hardwareId, std::unique_ptr<IKeyboardSession> keyboard,
                                std::unique_ptr<IVirtualPad> pad, const KeyArray& keys,
-                               std::atomic<uint32_t>& runningCounter)
+                               std::atomic<uint32_t>& runningCounter, EventQueue& events)
     : hardwareId_(std::move(hardwareId)),
       keyboard_(std::move(keyboard)),
       pad_(std::move(pad)),
       runningCounter_(runningCounter),
+      events_(events),
       ownedTable_(std::make_unique<MappingTable>(MappingTable::fromKeys(keys))),
       table_(ownedTable_.get()) {
     ownedTable_->version = ++versionCounter_;
@@ -41,6 +42,11 @@ MappingSession::MappingSession(std::string hardwareId, std::unique_ptr<IKeyboard
 
 MappingSession::~MappingSession() {
     stop();
+}
+
+void MappingSession::markDisconnected() noexcept {
+    disconnected_.store(true, std::memory_order_release);
+    keyboard_->interrupt();
 }
 
 void MappingSession::setMapping(const KeyArray& keys) {
@@ -108,8 +114,9 @@ void MappingSession::run() noexcept {
     uint64_t sumTicks = 0;
     uint64_t maxTicks = 0;
     uint32_t seenResets = 0;
+    WaitResult ended = WaitResult::Interrupted;
 
-    while (keyboard_->wait(event) == WaitResult::Event) {
+    while ((ended = keyboard_->wait(event)) == WaitResult::Event) {
         const size_t key = event.keyCode;
         if (key >= kKeyCodeSpace) {
             continue;
@@ -163,6 +170,22 @@ void MappingSession::run() noexcept {
     }
 
     pad_->reset();
+
+    // Keys still held would never get their release to Windows, since the driver swallowed it.
+    uint16_t heldKeys[kKeyCodeSpace];
+    size_t heldCount = 0;
+    for (size_t word = 0; word < keysDown.size(); ++word) {
+        for (uint64_t bits = keysDown[word]; bits != 0; bits &= bits - 1) {
+            heldKeys[heldCount++] = static_cast<uint16_t>(word * 64 + static_cast<size_t>(std::countr_zero(bits)));
+        }
+    }
+    keyboard_->releaseKeys(heldKeys, heldCount);
+
+    if (ended == WaitResult::DeviceLost) {
+        events_.push(FGC_EVENT_SESSION_FAULTED, hardwareId_.c_str());
+    } else if (disconnected_.load(std::memory_order_acquire)) {
+        events_.push(FGC_EVENT_KEYBOARD_DISCONNECTED, hardwareId_.c_str());
+    }
 
     if (mmcss) {
         AvRevertMmThreadCharacteristics(mmcss);

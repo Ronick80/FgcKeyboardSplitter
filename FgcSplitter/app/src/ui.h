@@ -33,6 +33,8 @@ private:
     void applyMapping();
     void startIdentify();
     void pollIdentify();
+    void pollEvents();
+    void report(const std::string& action, FgcResult result);
     void drawStatusBar();
     void drawDrivers();
     void drawKeyboards();
@@ -78,4 +80,6 @@ private:
     FgcControllerLimit limit_{};      // with room for one more pad
     double limitCheckedAt_ = -10.0;
     std::string actionMessage_;
+    bool actionFailed_ = false;
+    std::vector<std::string> notices_;  // unplanned stops, until dismissed
 };

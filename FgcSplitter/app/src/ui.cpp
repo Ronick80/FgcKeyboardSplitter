@@ -50,25 +50,25 @@ const char* describe(FgcResult result) {
         case FGC_OK:
             return "OK";
         case FGC_ERR_INVALID_ARGUMENT:
-            return "Invalid argument";
+            return "Invalid request";
         case FGC_ERR_NOT_IMPLEMENTED:
             return "Not implemented yet";
         case FGC_ERR_BUFFER_TOO_SMALL:
             return "Buffer too small";
         case FGC_ERR_DRIVER_MISSING:
-            return "A required driver is missing";
+            return "A driver is missing or not active yet. See the Drivers section above";
         case FGC_ERR_ALREADY_RUNNING:
-            return "Already running";
+            return "This keyboard is already running";
         case FGC_ERR_NOT_RUNNING:
-            return "Not running";
+            return "This keyboard is not running";
         case FGC_ERR_CONTROLLER_LIMIT:
             return "No free controller slot (Windows allows 4; ScpVBus slots can also be stuck until it restarts)";
         case FGC_ERR_NOT_FOUND:
-            return "Not found";
+            return "Not found (the keyboard may have been unplugged; click Refresh list)";
         case FGC_ERR_IO:
-            return "I/O error";
+            return "Could not talk to the driver. Close other programs that use this keyboard and try again";
         case FGC_ERR_INTERNAL:
-            return "Internal error";
+            return "Unexpected error";
         case FGC_ERR_ACCESS_DENIED:
             return "Access denied (run as administrator)";
         case FGC_ERR_DEVICE_BUSY:
@@ -163,7 +163,29 @@ void AppUi::applyMapping() {
     profileState().dirty = true;
     const FgcResult result = fgc_set_mapping(context_, keyboards_[selectedKeyboard_].hardware_id, &mapping_);
     if (result != FGC_OK) {
-        actionMessage_ = std::string("Mapping: ") + describe(result);
+        report("Mapping", result);
+    }
+}
+
+void AppUi::report(const std::string& action, FgcResult result) {
+    actionFailed_ = result != FGC_OK;
+    actionMessage_ = actionFailed_ ? action + ": " + describe(result) : action + ": done";
+}
+
+void AppUi::pollEvents() {
+    FgcEvent event{};
+    event.struct_size = sizeof(event);
+    while (fgc_poll_event(context_, &event) == FGC_OK && event.type != FGC_EVENT_NONE) {
+        std::string name = event.hardware_id;
+        for (const FgcKeyboardInfo& keyboard : keyboards_) {
+            if (name == keyboard.hardware_id) {
+                name = keyboard.display_name;
+            }
+        }
+        notices_.push_back(event.type == FGC_EVENT_KEYBOARD_DISCONNECTED
+                               ? name + " was unplugged. Its mapping stopped and the virtual controller was released."
+                               : name + " stopped unexpectedly (lost contact with the keyboard driver). Click Start to resume.");
+        limitCheckedAt_ = -10.0;
     }
 }
 
@@ -246,7 +268,8 @@ void AppUi::startIdentify() {
     const FgcResult result = fgc_identify_begin(context_);
     identifying_ = result == FGC_OK;
     identifyStartedAt_ = ImGui::GetTime();
-    actionMessage_ = identifying_ ? std::string() : std::string("Identify: ") + describe(result);
+    actionFailed_ = result != FGC_OK;
+    actionMessage_ = actionFailed_ ? std::string("Identify: ") + describe(result) : std::string();
 }
 
 void AppUi::pollIdentify() {
@@ -309,6 +332,7 @@ void AppUi::draw() {
     status_.struct_size = sizeof(status_);
     fgc_get_status(context_, &status_);
     updateRunning();
+    pollEvents();
     if (ImGui::GetTime() - limitCheckedAt_ >= 1.0) {
         refreshLimit();
     }
@@ -321,6 +345,14 @@ void AppUi::draw() {
                                        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus;
     if (ImGui::Begin("FGC Keyboard Splitter", nullptr, flags)) {
         drawStatusBar();
+        for (size_t i = 0; i < notices_.size();) {
+            ImGui::PushID(static_cast<int>(i));
+            ImGui::TextColored(kAmber, "%s", notices_[i].c_str());
+            ImGui::SameLine();
+            const bool dismissed = ImGui::SmallButton("Dismiss");
+            ImGui::PopID();
+            i = dismissed ? (notices_.erase(notices_.begin() + static_cast<std::ptrdiff_t>(i)), i) : i + 1;
+        }
         ImGui::Separator();
         drawDrivers();
         ImGui::Spacing();
@@ -400,8 +432,8 @@ void AppUi::drawDrivers() {
         } else {
             ImGui::TextColored(kRed, "Not installed");
             ImGui::TextWrapped(
-                "From an administrator prompt, run \"devcon install ScpVBus.inf Root\\ScpVBus\" in the folder "
-                "containing the ScpVBus driver files.");
+                "From an administrator prompt, go to the drivers\\ScpVBus folder next to this program and run "
+                "\"devcon.exe install ScpVBus.inf Root\\ScpVBus\".");
         }
     }
 
@@ -459,8 +491,7 @@ void AppUi::drawControls() {
 
     ImGui::BeginDisabled(!canStart);
     if (ImGui::Button("Start", ImVec2(120, 0))) {
-        const FgcResult result = fgc_start(context_, selectedHardwareId());
-        actionMessage_ = std::string("Start: ") + describe(result);
+        report("Start", fgc_start(context_, selectedHardwareId()));
         limitCheckedAt_ = -10.0;
     }
     ImGui::EndDisabled();
@@ -468,8 +499,7 @@ void AppUi::drawControls() {
     ImGui::SameLine();
     ImGui::BeginDisabled(!selectedIsRunning);
     if (ImGui::Button("Stop", ImVec2(120, 0))) {
-        const FgcResult result = fgc_stop(context_, selectedHardwareId());
-        actionMessage_ = std::string("Stop: ") + describe(result);
+        report("Stop", fgc_stop(context_, selectedHardwareId()));
         limitCheckedAt_ = -10.0;
     }
     ImGui::EndDisabled();
@@ -477,8 +507,7 @@ void AppUi::drawControls() {
     ImGui::SameLine();
     ImGui::BeginDisabled(status_.running_sessions == 0);
     if (ImGui::Button("Stop all", ImVec2(120, 0))) {
-        const FgcResult result = fgc_stop_all(context_);
-        actionMessage_ = std::string("Stop all: ") + describe(result);
+        report("Stop all", fgc_stop_all(context_));
         limitCheckedAt_ = -10.0;
     }
     ImGui::EndDisabled();
@@ -495,7 +524,7 @@ void AppUi::drawControls() {
         "keyboard, click Stop with the mouse.");
 
     if (!actionMessage_.empty()) {
-        ImGui::TextUnformatted(actionMessage_.c_str());
+        ImGui::TextColored(actionFailed_ ? kRed : kGrey, "%s", actionMessage_.c_str());
     }
 }
 

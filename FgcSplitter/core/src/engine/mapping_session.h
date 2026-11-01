@@ -8,6 +8,7 @@
 
 #include "backends/keyboard_backend.h"
 #include "backends/pad_backend.h"
+#include "event_queue.h"
 #include "mapping_table.h"
 
 namespace fgc {
@@ -23,10 +24,11 @@ struct LatencySnapshot {
 // One keyboard feeding one virtual pad on its own high-priority thread.
 class MappingSession {
 public:
-    // runningCounter is incremented by start() and decremented when the thread exits.
+    // runningCounter is incremented by start() and decremented when the thread exits. Events about an
+    // unplanned end of the session are pushed to events.
     MappingSession(std::string hardwareId, std::unique_ptr<IKeyboardSession> keyboard,
                    std::unique_ptr<IVirtualPad> pad, const KeyArray& keys,
-                   std::atomic<uint32_t>& runningCounter);
+                   std::atomic<uint32_t>& runningCounter, EventQueue& events);
     ~MappingSession();
 
     MappingSession(const MappingSession&) = delete;
@@ -46,6 +48,14 @@ public:
         return finished_.load(std::memory_order_acquire);
     }
 
+    // False once the keyboard was unplugged.
+    bool keyboardConnected() const noexcept {
+        return keyboard_->connected();
+    }
+
+    // Ends the session as an unplanned disconnect: the thread exits, resets the pad, and reports it.
+    void markDisconnected() noexcept;
+
     std::chrono::steady_clock::time_point startedAt() const noexcept {
         return startedAt_;
     }
@@ -61,7 +71,9 @@ private:
     std::unique_ptr<IKeyboardSession> keyboard_;
     std::unique_ptr<IVirtualPad> pad_;
     std::atomic<uint32_t>& runningCounter_;
+    EventQueue& events_;
     std::atomic<bool> finished_{false};
+    std::atomic<bool> disconnected_{false};
     const std::chrono::steady_clock::time_point startedAt_ = std::chrono::steady_clock::now();
 
     // Written only by the mapping thread (and zeroed by resetLatency()); read by latency().
