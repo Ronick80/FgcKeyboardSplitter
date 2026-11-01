@@ -1,7 +1,15 @@
+include(FetchContent)
+FetchContent_Declare(nlohmann_json
+    URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+)
+FetchContent_MakeAvailable(nlohmann_json)
+
 add_library(FgcCore SHARED
     include/fgc_core.h
     src/api.cpp
     src/context.h
+    src/profiles/profile_store.h
+    src/profiles/profile_store.cpp
     src/backends/keyboard_backend.h
     src/backends/pad_backend.h
     src/backends/interception_keyboard.h
@@ -23,4 +31,4 @@ target_include_directories(FgcCore
 
 target_compile_definitions(FgcCore PRIVATE FGC_CORE_BUILD NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
 target_compile_options(FgcCore PRIVATE /W4 /permissive- /utf-8)
-target_link_libraries(FgcCore PRIVATE setupapi version advapi32 avrt)
+target_link_libraries(FgcCore PRIVATE nlohmann_json::nlohmann_json setupapi version advapi32 avrt shell32 ole32)

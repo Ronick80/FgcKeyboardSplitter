@@ -55,7 +55,9 @@ typedef enum FgcResult {
     FGC_ERR_IO = 9,
     FGC_ERR_INTERNAL = 10,
     FGC_ERR_ACCESS_DENIED = 11,
-    FGC_ERR_DEVICE_BUSY = 12 /* another process already holds the keyboard */
+    FGC_ERR_DEVICE_BUSY = 12, /* another process already holds the keyboard */
+    FGC_ERR_BAD_FORMAT = 13, /* a stored file could not be understood */
+    FGC_ERR_ALREADY_EXISTS = 14
 } FgcResult;
 
 typedef enum FgcInterceptionState {
@@ -181,25 +183,44 @@ FGC_API FgcResult fgc_identify_poll(FgcContext* context, int32_t* out_index);
 
 /* [lock-free] Fills the mapping used for keyboards that have none of their own. */
 FGC_API FgcResult fgc_get_default_mapping(FgcMapping* out_mapping);
-/* [control] Returns the default mapping for a keyboard that has none set. */
+/* [control] Returns the keyboard's current mapping. A keyboard that has none yet starts from its last-used
+   profile, or the default mapping when it has no usable one. */
 FGC_API FgcResult fgc_get_mapping(FgcContext* context, const char* hardware_id, FgcMapping* out_mapping);
-/* [control] */
+/* [control] Sets the keyboard's current mapping, live if it is running. Not saved to any profile. */
 FGC_API FgcResult fgc_set_mapping(FgcContext* context, const char* hardware_id, const FgcMapping* mapping);
 
-/* Profiles (stored per keyboard hardware ID) */
+/* Profiles (stored per keyboard hardware ID)
+ *
+ * A profile is a named mapping. Files live in %APPDATA%\FgcKeyboardSplitter:
+ *   profiles\<hardware id>\<name>.json   one file per profile; <hardware id> has \ / : * ? " < > | replaced by _
+ *   last_used.json                       {"format":"fgc-last-used","version":1,"profiles":{"<hardware id>":"<name>"}}
+ * The profile name is the file name. Names are 1-63 UTF-8 bytes and cannot contain \ / : * ? " < > |
+ * or control characters, start or end with a space, end with a dot, or be a reserved Windows device name.
+ * Names are compared case-insensitively, as on the file system.
+ *
+ * Profile file (UTF-8 JSON):
+ *   {"format":"fgc-profile","version":1,"keyboard":"<hardware id>",
+ *    "bindings":{"a":36,"dpad_up":17,"left_stick_left":331, ...}}
+ * Each binding is a key code: set-1 scan code, plus 256 for E0-prefixed keys, 0 for unbound. Binding names
+ * follow FgcXboxInput: a b x y left_bumper right_bumper left_trigger right_trigger left_stick_click
+ * right_stick_click start back guide dpad_up dpad_down dpad_left dpad_right left_stick_up left_stick_down
+ * left_stick_left left_stick_right right_stick_up right_stick_down right_stick_left right_stick_right.
+ * A missing binding is unbound; unknown names are ignored. A "version" above 1 is rejected.
+ */
 
 /* [control] */
 FGC_API FgcResult fgc_profile_count(FgcContext* context, const char* hardware_id, uint32_t* out_count);
-/* [control] */
+/* [control] Names are sorted case-insensitively. FGC_ERR_NOT_FOUND when index is out of range. */
 FGC_API FgcResult fgc_profile_get_name(FgcContext* context, const char* hardware_id, uint32_t index,
                                        char* out_name, uint32_t out_name_size);
-/* [control] Also marks the profile as last used for this keyboard. */
+/* [control] Makes the profile the keyboard's current mapping (live if running) and marks it as last used.
+   out_mapping may be NULL. */
 FGC_API FgcResult fgc_profile_load(FgcContext* context, const char* hardware_id, const char* name,
                                    FgcMapping* out_mapping);
-/* [control] Also marks the profile as last used for this keyboard. */
+/* [control] Creates or replaces a profile from the given mapping and marks it as last used. */
 FGC_API FgcResult fgc_profile_save(FgcContext* context, const char* hardware_id, const char* name,
                                    const FgcMapping* mapping);
-/* [control] */
+/* [control] FGC_ERR_ALREADY_EXISTS if new_name belongs to a different profile. */
 FGC_API FgcResult fgc_profile_rename(FgcContext* context, const char* hardware_id, const char* old_name,
                                      const char* new_name);
 /* [control] */

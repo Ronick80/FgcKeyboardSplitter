@@ -44,10 +44,51 @@ FgcInterceptionState toPublic(fgc::DriverState state) {
     return FGC_INTERCEPTION_NOT_INSTALLED;
 }
 
-// Caller holds the control lock.
-fgc::KeyArray keysFor(const FgcContext& context, const std::string& hardwareId) {
+// Caller holds the control lock. A keyboard with no mapping yet starts from its last-used profile.
+fgc::KeyArray currentKeys(FgcContext& context, const std::string& hardwareId) {
     const auto stored = context.mappings.find(hardwareId);
-    return stored != context.mappings.end() ? stored->second : fgc::defaultKeys();
+    if (stored != context.mappings.end()) {
+        return stored->second;
+    }
+
+    fgc::KeyArray keys = fgc::defaultKeys();
+    std::string lastUsed;
+    if (context.profiles.lastUsed(hardwareId, lastUsed)) {
+        fgc::KeyArray loaded;
+        if (context.profiles.load(hardwareId, lastUsed, loaded) == FGC_OK) {
+            keys = loaded;
+        }
+    }
+    context.mappings[hardwareId] = keys;
+    return keys;
+}
+
+// Caller holds the control lock.
+void applyKeys(FgcContext& context, const std::string& hardwareId, const fgc::KeyArray& keys) {
+    context.mappings[hardwareId] = keys;
+    const auto session = context.sessions.find(hardwareId);
+    if (session != context.sessions.end() && !session->second->finished()) {
+        session->second->setMapping(keys);
+    }
+}
+
+FgcResult copyName(const std::string& name, char* out, uint32_t size) {
+    if (name.size() + 1 > size) {
+        return FGC_ERR_BUFFER_TOO_SMALL;
+    }
+    std::memcpy(out, name.c_str(), name.size() + 1);
+    return FGC_OK;
+}
+
+// False when a key code is outside the range a mapping can hold.
+bool toKeys(const FgcMapping& mapping, fgc::KeyArray& keys) {
+    for (size_t i = 0; i < keys.size(); ++i) {
+        if (mapping.key_for_input[i] >= fgc::kKeyCodeSpace) {
+            return false;
+        }
+        keys[i] = mapping.key_for_input[i];
+    }
+    return true;
 }
 
 }  // namespace
@@ -200,7 +241,7 @@ FGC_API FgcResult fgc_get_mapping(FgcContext* context, const char* hardware_id, 
     }
     return guarded([&] {
         std::lock_guard<std::mutex> lock(context->controlLock);
-        const fgc::KeyArray keys = keysFor(*context, hardware_id);
+        const fgc::KeyArray keys = currentKeys(*context, hardware_id);
         std::copy(keys.begin(), keys.end(), out_mapping->key_for_input);
         return FGC_OK;
     });
@@ -211,19 +252,12 @@ FGC_API FgcResult fgc_set_mapping(FgcContext* context, const char* hardware_id, 
         return FGC_ERR_INVALID_ARGUMENT;
     }
     fgc::KeyArray keys;
-    for (size_t i = 0; i < keys.size(); ++i) {
-        if (mapping->key_for_input[i] >= fgc::kKeyCodeSpace) {
-            return FGC_ERR_INVALID_ARGUMENT;
-        }
-        keys[i] = mapping->key_for_input[i];
+    if (!toKeys(*mapping, keys)) {
+        return FGC_ERR_INVALID_ARGUMENT;
     }
     return guarded([&] {
         std::lock_guard<std::mutex> lock(context->controlLock);
-        context->mappings[hardware_id] = keys;
-        const auto session = context->sessions.find(hardware_id);
-        if (session != context->sessions.end() && !session->second->finished()) {
-            session->second->setMapping(keys);
-        }
+        applyKeys(*context, hardware_id, keys);
         return FGC_OK;
     });
 }
@@ -232,23 +266,55 @@ FGC_API FgcResult fgc_profile_count(FgcContext* context, const char* hardware_id
     if (!context || !hardware_id || !out_count) {
         return FGC_ERR_INVALID_ARGUMENT;
     }
-    return FGC_ERR_NOT_IMPLEMENTED;
+    return guarded([&] {
+        std::lock_guard<std::mutex> lock(context->controlLock);
+        std::vector<std::string> names;
+        const FgcResult result = context->profiles.list(hardware_id, names);
+        if (result == FGC_OK) {
+            *out_count = static_cast<uint32_t>(names.size());
+        }
+        return result;
+    });
 }
 
-FGC_API FgcResult fgc_profile_get_name(FgcContext* context, const char* hardware_id, uint32_t,
+FGC_API FgcResult fgc_profile_get_name(FgcContext* context, const char* hardware_id, uint32_t index,
                                        char* out_name, uint32_t out_name_size) {
     if (!context || !hardware_id || !out_name || out_name_size == 0) {
         return FGC_ERR_INVALID_ARGUMENT;
     }
-    return FGC_ERR_NOT_IMPLEMENTED;
+    return guarded([&] {
+        std::lock_guard<std::mutex> lock(context->controlLock);
+        std::vector<std::string> names;
+        const FgcResult result = context->profiles.list(hardware_id, names);
+        if (result != FGC_OK) {
+            return result;
+        }
+        if (index >= names.size()) {
+            return FGC_ERR_NOT_FOUND;
+        }
+        return copyName(names[index], out_name, out_name_size);
+    });
 }
 
 FGC_API FgcResult fgc_profile_load(FgcContext* context, const char* hardware_id, const char* name,
                                    FgcMapping* out_mapping) {
-    if (!context || !hardware_id || !name || !validStruct(out_mapping)) {
+    if (!context || !hardware_id || !name || (out_mapping && !validStruct(out_mapping))) {
         return FGC_ERR_INVALID_ARGUMENT;
     }
-    return FGC_ERR_NOT_IMPLEMENTED;
+    return guarded([&] {
+        std::lock_guard<std::mutex> lock(context->controlLock);
+        fgc::KeyArray keys;
+        const FgcResult result = context->profiles.load(hardware_id, name, keys);
+        if (result != FGC_OK) {
+            return result;
+        }
+        applyKeys(*context, hardware_id, keys);
+        context->profiles.setLastUsed(hardware_id, name);
+        if (out_mapping) {
+            std::copy(keys.begin(), keys.end(), out_mapping->key_for_input);
+        }
+        return FGC_OK;
+    });
 }
 
 FGC_API FgcResult fgc_profile_save(FgcContext* context, const char* hardware_id, const char* name,
@@ -256,7 +322,14 @@ FGC_API FgcResult fgc_profile_save(FgcContext* context, const char* hardware_id,
     if (!context || !hardware_id || !name || !validStruct(mapping)) {
         return FGC_ERR_INVALID_ARGUMENT;
     }
-    return FGC_ERR_NOT_IMPLEMENTED;
+    fgc::KeyArray keys;
+    if (!toKeys(*mapping, keys)) {
+        return FGC_ERR_INVALID_ARGUMENT;
+    }
+    return guarded([&] {
+        std::lock_guard<std::mutex> lock(context->controlLock);
+        return context->profiles.save(hardware_id, name, keys);
+    });
 }
 
 FGC_API FgcResult fgc_profile_rename(FgcContext* context, const char* hardware_id, const char* old_name,
@@ -264,14 +337,20 @@ FGC_API FgcResult fgc_profile_rename(FgcContext* context, const char* hardware_i
     if (!context || !hardware_id || !old_name || !new_name) {
         return FGC_ERR_INVALID_ARGUMENT;
     }
-    return FGC_ERR_NOT_IMPLEMENTED;
+    return guarded([&] {
+        std::lock_guard<std::mutex> lock(context->controlLock);
+        return context->profiles.rename(hardware_id, old_name, new_name);
+    });
 }
 
 FGC_API FgcResult fgc_profile_delete(FgcContext* context, const char* hardware_id, const char* name) {
     if (!context || !hardware_id || !name) {
         return FGC_ERR_INVALID_ARGUMENT;
     }
-    return FGC_ERR_NOT_IMPLEMENTED;
+    return guarded([&] {
+        std::lock_guard<std::mutex> lock(context->controlLock);
+        return context->profiles.remove(hardware_id, name);
+    });
 }
 
 FGC_API FgcResult fgc_profile_get_last_used(FgcContext* context, const char* hardware_id, char* out_name,
@@ -279,7 +358,14 @@ FGC_API FgcResult fgc_profile_get_last_used(FgcContext* context, const char* har
     if (!context || !hardware_id || !out_name || out_name_size == 0) {
         return FGC_ERR_INVALID_ARGUMENT;
     }
-    return FGC_ERR_NOT_IMPLEMENTED;
+    return guarded([&] {
+        std::lock_guard<std::mutex> lock(context->controlLock);
+        std::string name;
+        if (!context->profiles.lastUsed(hardware_id, name)) {
+            return FGC_ERR_NOT_FOUND;
+        }
+        return copyName(name, out_name, out_name_size);
+    });
 }
 
 FGC_API FgcResult fgc_check_controller_limit(FgcContext* context, uint32_t, FgcControllerLimit* out_limit) {
@@ -324,7 +410,7 @@ FGC_API FgcResult fgc_start(FgcContext* context, const char* hardware_id) {
         }
 
         auto session = std::make_unique<fgc::MappingSession>(id, std::move(keyboard), std::move(pad),
-                                                             keysFor(*context, id), context->runningSessions);
+                                                             currentKeys(*context, id), context->runningSessions);
         session->start();
         context->sessions.emplace(id, std::move(session));
         return FGC_OK;

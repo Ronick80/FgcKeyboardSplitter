@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <cstring>
 #include <initializer_list>
 
 #include "imgui.h"
@@ -15,7 +16,6 @@ const ImVec4 kAmber(0.95f, 0.75f, 0.30f, 1.0f);
 const ImVec4 kGrey(0.65f, 0.65f, 0.65f, 1.0f);
 
 constexpr double kIdentifyTimeoutSeconds = 15.0;
-constexpr uint16_t kEscapeKey = 0x01;
 
 const char* const kInputNames[FGC_INPUT_COUNT] = {
     "A",
@@ -73,8 +73,24 @@ const char* describe(FgcResult result) {
             return "Access denied (run as administrator)";
         case FGC_ERR_DEVICE_BUSY:
             return "Keyboard is in use by another program";
+        case FGC_ERR_BAD_FORMAT:
+            return "The file is damaged or from a newer version";
+        case FGC_ERR_ALREADY_EXISTS:
+            return "A profile with that name already exists";
     }
     return "Unknown error";
+}
+
+// Profile names become file names, so invalid ones are the common failure when saving or renaming.
+const char* describeNameError(FgcResult result) {
+    if (result == FGC_ERR_INVALID_ARGUMENT) {
+        return "Use 1-63 characters without \\ / : * ? \" < > |, with no leading or trailing space or trailing dot.";
+    }
+    return describe(result);
+}
+
+bool equalsIgnoreCase(const std::string& a, const std::string& b) {
+    return _stricmp(a.c_str(), b.c_str()) == 0;
 }
 
 // False when Windows has no name for the scan code.
@@ -136,9 +152,6 @@ void AppUi::onKeyDown(uint16_t keyCode) {
     }
     const int input = bindingInput_;
     bindingInput_ = -1;
-    if (keyCode == kEscapeKey) {
-        return;
-    }
     mapping_.key_for_input[input] = keyCode;
     applyMapping();
 }
@@ -147,18 +160,86 @@ void AppUi::applyMapping() {
     if (selectedKeyboard_ < 0) {
         return;
     }
+    profileState().dirty = true;
     const FgcResult result = fgc_set_mapping(context_, keyboards_[selectedKeyboard_].hardware_id, &mapping_);
     if (result != FGC_OK) {
         actionMessage_ = std::string("Mapping: ") + describe(result);
     }
 }
 
+AppUi::ProfileUiState& AppUi::profileState() {
+    return profileStates_[keyboards_[selectedKeyboard_].hardware_id];
+}
+
+const char* AppUi::selectedHardwareId() const {
+    return keyboards_[selectedKeyboard_].hardware_id;
+}
+
 void AppUi::selectKeyboard(int index) {
     selectedKeyboard_ = index;
     bindingInput_ = -1;
-    if (index >= 0) {
-        fgc_get_mapping(context_, keyboards_[index].hardware_id, &mapping_);
+    profileMessage_.clear();
+    profileNames_.clear();
+    if (index < 0) {
+        return;
     }
+
+    const char* hardwareId = keyboards_[index].hardware_id;
+    fgc_get_mapping(context_, hardwareId, &mapping_);  // the core starts a keyboard from its last-used profile
+    if (profileStates_.find(hardwareId) == profileStates_.end()) {
+        ProfileUiState state;
+        char lastUsed[FGC_PROFILE_NAME_MAX];
+        if (fgc_profile_get_last_used(context_, hardwareId, lastUsed, sizeof(lastUsed)) == FGC_OK) {
+            state.current = lastUsed;
+        }
+        profileStates_[hardwareId] = state;
+    }
+    refreshProfiles();
+}
+
+void AppUi::refreshProfiles() {
+    profileNames_.clear();
+    uint32_t count = 0;
+    if (fgc_profile_count(context_, selectedHardwareId(), &count) != FGC_OK) {
+        return;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        char name[FGC_PROFILE_NAME_MAX];
+        if (fgc_profile_get_name(context_, selectedHardwareId(), i, name, sizeof(name)) == FGC_OK) {
+            profileNames_.push_back(name);
+        }
+    }
+}
+
+void AppUi::loadProfile(const std::string& name) {
+    const FgcResult result = fgc_profile_load(context_, selectedHardwareId(), name.c_str(), &mapping_);
+    if (result != FGC_OK) {
+        profileMessage_ = "Load: " + std::string(describe(result));
+        return;
+    }
+    profileState() = {name, false};
+    profileMessage_.clear();
+    bindingInput_ = -1;
+}
+
+bool AppUi::saveProfile(const std::string& name) {
+    const FgcResult result = fgc_profile_save(context_, selectedHardwareId(), name.c_str(), &mapping_);
+    if (result != FGC_OK) {
+        popupError_ = describeNameError(result);
+        profileMessage_ = "Save: " + std::string(describe(result));
+        return false;
+    }
+    profileMessage_.clear();
+    refreshProfiles();
+    // Names match case-insensitively, so keep the spelling the file already has.
+    std::string stored = name;
+    for (const std::string& existing : profileNames_) {
+        if (equalsIgnoreCase(existing, name)) {
+            stored = existing;
+        }
+    }
+    profileState() = {stored, false};
+    return true;
 }
 
 void AppUi::startIdentify() {
@@ -367,17 +448,19 @@ void AppUi::drawControls() {
 }
 
 void AppUi::drawMapping() {
-    ImGui::SeparatorText("Mapping");
-
     if (selectedKeyboard_ < 0) {
+        ImGui::SeparatorText("Mapping");
         ImGui::TextColored(kGrey, "Select a keyboard to edit its mapping.");
         return;
     }
 
+    drawProfiles();
+    ImGui::Spacing();
+    ImGui::SeparatorText("Mapping");
     ImGui::TextWrapped(
-        "Click a key button, then press the new key (Esc cancels). Use \"...\" to pick from a list instead; "
-        "that also works while running, when the selected keyboard is hidden from this window. Changes apply "
-        "immediately.");
+        "Click a key button, then press the new key; click the button again to cancel. Use \"...\" to pick "
+        "from a list instead; that also works while running, when the selected keyboard is hidden from this "
+        "window. Changes apply immediately.");
 
     if (ImGui::Button("Reset to defaults")) {
         fgc_get_default_mapping(&mapping_);
@@ -464,4 +547,146 @@ void AppUi::drawMappingRow(FgcXboxInput input) {
         ImGui::EndPopup();
     }
     ImGui::PopID();
+}
+
+void AppUi::drawProfiles() {
+    const float font = ImGui::GetFontSize();
+    ProfileUiState& state = profileState();
+
+    ImGui::SeparatorText("Profile");
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Current:");
+    ImGui::SameLine();
+    if (state.current.empty()) {
+        ImGui::TextColored(kGrey, "(no profile)");
+    } else {
+        ImGui::TextUnformatted(state.current.c_str());
+    }
+    if (state.dirty) {
+        ImGui::SameLine();
+        ImGui::TextColored(kAmber, "- unsaved changes");
+    }
+
+    ImGui::SetNextItemWidth(font * 14.0f);
+    if (ImGui::BeginCombo("##load", "Load a profile...")) {
+        for (const std::string& name : profileNames_) {
+            if (ImGui::Selectable(name.c_str(), name == state.current)) {
+                loadProfile(name);
+            }
+        }
+        if (profileNames_.empty()) {
+            ImGui::TextDisabled("No saved profiles");
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::SameLine();
+    ImGui::BeginDisabled(state.current.empty() || !state.dirty);
+    if (ImGui::Button("Save")) {
+        saveProfile(state.current);
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    if (ImGui::Button("Save as...")) {
+        snprintf(nameInput_, sizeof(nameInput_), "%s", state.current.c_str());
+        popupError_.clear();
+        bindingInput_ = -1;
+        ImGui::OpenPopup("Save profile as");
+    }
+
+    ImGui::BeginDisabled(state.current.empty());
+    ImGui::SameLine();
+    if (ImGui::Button("Rename...")) {
+        snprintf(nameInput_, sizeof(nameInput_), "%s", state.current.c_str());
+        popupError_.clear();
+        bindingInput_ = -1;
+        ImGui::OpenPopup("Rename profile");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Delete...")) {
+        popupError_.clear();
+        bindingInput_ = -1;
+        ImGui::OpenPopup("Delete profile");
+    }
+    ImGui::EndDisabled();
+
+    if (ImGui::BeginPopupModal("Save profile as", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (ImGui::IsWindowAppearing()) {
+            ImGui::SetKeyboardFocusHere();
+        }
+        ImGui::TextUnformatted("Profile name:");
+        const bool enter = ImGui::InputText("##name", nameInput_, sizeof(nameInput_), ImGuiInputTextFlags_EnterReturnsTrue);
+        bool replaces = false;
+        for (const std::string& existing : profileNames_) {
+            replaces = replaces || equalsIgnoreCase(existing, nameInput_);
+        }
+        if (replaces) {
+            ImGui::TextColored(kAmber, "A profile with this name exists and will be replaced.");
+        }
+        if (!popupError_.empty()) {
+            ImGui::TextColored(kRed, "%s", popupError_.c_str());
+        }
+        if ((ImGui::Button("Save", ImVec2(font * 6.0f, 0)) || enter) && saveProfile(nameInput_)) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(font * 6.0f, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (ImGui::BeginPopupModal("Rename profile", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (ImGui::IsWindowAppearing()) {
+            ImGui::SetKeyboardFocusHere();
+        }
+        ImGui::TextUnformatted("New name:");
+        const bool enter = ImGui::InputText("##name", nameInput_, sizeof(nameInput_), ImGuiInputTextFlags_EnterReturnsTrue);
+        if (!popupError_.empty()) {
+            ImGui::TextColored(kRed, "%s", popupError_.c_str());
+        }
+        if (ImGui::Button("Rename", ImVec2(font * 6.0f, 0)) || enter) {
+            const FgcResult result = fgc_profile_rename(context_, selectedHardwareId(), state.current.c_str(), nameInput_);
+            if (result == FGC_OK) {
+                state.current = nameInput_;
+                refreshProfiles();
+                ImGui::CloseCurrentPopup();
+            } else {
+                popupError_ = describeNameError(result);
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(font * 6.0f, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (ImGui::BeginPopupModal("Delete profile", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Delete the profile \"%s\"?", state.current.c_str());
+        ImGui::TextUnformatted("The keyboard keeps its current mapping, but it will no longer be saved.");
+        if (!popupError_.empty()) {
+            ImGui::TextColored(kRed, "%s", popupError_.c_str());
+        }
+        if (ImGui::Button("Delete", ImVec2(font * 6.0f, 0))) {
+            const FgcResult result = fgc_profile_delete(context_, selectedHardwareId(), state.current.c_str());
+            if (result == FGC_OK) {
+                state = {};
+                refreshProfiles();
+                ImGui::CloseCurrentPopup();
+            } else {
+                popupError_ = describe(result);
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(font * 6.0f, 0))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (!profileMessage_.empty()) {
+        ImGui::TextColored(kRed, "%s", profileMessage_.c_str());
+    }
 }

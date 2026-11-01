@@ -10,10 +10,12 @@
 #include "backends/keyboard_backend.h"
 #include "backends/pad_backend.h"
 #include "engine/mapping_session.h"
+#include "profiles/profile_store.h"
 
 struct FgcContext {
     std::unique_ptr<fgc::IKeyboardInput> keyboard;
     std::unique_ptr<fgc::IVirtualPadBus> padBus;
+    fgc::ProfileStore profiles{fgc::ProfileStore::defaultRoot()};
 
     // Guards the control-plane state below. Mapping threads never take it.
     std::mutex controlLock;
