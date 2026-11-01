@@ -3,12 +3,113 @@
 #include <windows.h>
 
 #include <setupapi.h>
+#include <winioctl.h>
+
+#include <cstring>
+#include <string>
+#include <vector>
 
 namespace fgc {
 namespace {
 
 // {F679F562-3164-42CE-A4DB-E7DDBE723909}
 const GUID kScpVBusInterface = {0xf679f562, 0x3164, 0x42ce, {0xa4, 0xdb, 0xe7, 0xdd, 0xbe, 0x72, 0x39, 0x09}};
+
+constexpr uint32_t kMaxPads = 4;
+
+constexpr DWORD kIoctlPlugIn = CTL_CODE(FILE_DEVICE_BUS_EXTENDER, 0x801, METHOD_BUFFERED, FILE_WRITE_DATA);
+constexpr DWORD kIoctlUnplug = CTL_CODE(FILE_DEVICE_BUS_EXTENDER, 0x802, METHOD_BUFFERED, FILE_WRITE_DATA);
+constexpr DWORD kIoctlReport =
+    CTL_CODE(FILE_DEVICE_BUS_EXTENDER, 0x804, METHOD_BUFFERED, FILE_WRITE_DATA | FILE_READ_DATA);
+constexpr DWORD kIoctlIsPlugged =
+    CTL_CODE(FILE_DEVICE_BUS_EXTENDER, 0x901, METHOD_BUFFERED, FILE_WRITE_DATA | FILE_READ_DATA);
+
+constexpr size_t kReportSize = 28;
+constexpr size_t kReportGamepadOffset = 10;
+constexpr size_t kFeedbackSize = 9;
+
+std::wstring findBusPath() {
+    const HDEVINFO devices =
+        SetupDiGetClassDevsW(&kScpVBusInterface, nullptr, nullptr, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+    if (devices == INVALID_HANDLE_VALUE) {
+        return {};
+    }
+
+    std::wstring path;
+    SP_DEVICE_INTERFACE_DATA interfaceData = {};
+    interfaceData.cbSize = sizeof(interfaceData);
+    if (SetupDiEnumDeviceInterfaces(devices, nullptr, &kScpVBusInterface, 0, &interfaceData)) {
+        DWORD required = 0;
+        SetupDiGetDeviceInterfaceDetailW(devices, &interfaceData, nullptr, 0, &required, nullptr);
+        std::vector<BYTE> buffer(required);
+        auto* detail = reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_W*>(buffer.data());
+        detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
+        if (required > 0 && SetupDiGetDeviceInterfaceDetailW(devices, &interfaceData, detail, required, nullptr, nullptr)) {
+            path = detail->DevicePath;
+        }
+    }
+    SetupDiDestroyDeviceInfoList(devices);
+    return path;
+}
+
+bool isSlotPlugged(HANDLE bus, uint32_t slot) {
+    ULONG input = slot;
+    ULONG output = 0;
+    DWORD bytes = 0;
+    return DeviceIoControl(bus, kIoctlIsPlugged, &input, sizeof(input), &output, sizeof(output), &bytes, nullptr) &&
+           output != 0;
+}
+
+bool plugInSlot(HANDLE bus, uint32_t slot) {
+    uint8_t buffer[16] = {};
+    buffer[0] = sizeof(buffer);
+    std::memcpy(&buffer[4], &slot, sizeof(slot));
+    DWORD bytes = 0;
+    return DeviceIoControl(bus, kIoctlPlugIn, buffer, sizeof(buffer), nullptr, 0, &bytes, nullptr) != FALSE;
+}
+
+bool unplugSlot(HANDLE bus, uint32_t slot) {
+    // BUSENUM_UNPLUG_HARDWARE: size, serial number, flags, reserved.
+    uint32_t buffer[4] = {sizeof(buffer), slot, 0, 0};
+    DWORD bytes = 0;
+    return DeviceIoControl(bus, kIoctlUnplug, buffer, sizeof(buffer), nullptr, 0, &bytes, nullptr) != FALSE;
+}
+
+// Each pad keeps its own bus handle: synchronous IOCTLs on one handle are serialized, which
+// would couple the latency of separate keyboards.
+class ScpVBusPad final : public IVirtualPad {
+public:
+    ScpVBusPad(HANDLE bus, uint32_t slot) : bus_(bus), slot_(slot) {
+        report_[0] = kReportSize;
+        std::memcpy(&report_[4], &slot, sizeof(slot));
+        report_[9] = 0x14;  // length of the gamepad payload
+    }
+
+    ~ScpVBusPad() override {
+        reset();
+        unplugSlot(bus_, slot_);
+        CloseHandle(bus_);
+    }
+
+    FgcResult submit(const PadState& state) noexcept override {
+        std::memcpy(&report_[kReportGamepadOffset], &state, sizeof(state));
+        DWORD bytes = 0;
+        return DeviceIoControl(bus_, kIoctlReport, report_, sizeof(report_), feedback_, sizeof(feedback_), &bytes,
+                               nullptr)
+                   ? FGC_OK
+                   : FGC_ERR_IO;
+    }
+
+    void reset() noexcept override {
+        submit(PadState{});
+    }
+
+private:
+    HANDLE bus_;
+    uint32_t slot_;
+    uint8_t report_[kReportSize] = {};
+    uint8_t feedback_[kFeedbackSize] = {};  // vibration and LED state; the driver requires room for it
+};
 
 }  // namespace
 
@@ -25,8 +126,27 @@ bool ScpVBusPadBus::isAvailable() const {
     return present;
 }
 
-FgcResult ScpVBusPadBus::plugIn(std::unique_ptr<IVirtualPad>&) {
-    return FGC_ERR_NOT_IMPLEMENTED;
+FgcResult ScpVBusPadBus::plugIn(std::unique_ptr<IVirtualPad>& out) {
+    const std::wstring path = findBusPath();
+    if (path.empty()) {
+        return FGC_ERR_DRIVER_MISSING;
+    }
+
+    const HANDLE bus = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                   nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (bus == INVALID_HANDLE_VALUE) {
+        return GetLastError() == ERROR_ACCESS_DENIED ? FGC_ERR_ACCESS_DENIED : FGC_ERR_IO;
+    }
+
+    for (uint32_t slot = 1; slot <= kMaxPads; ++slot) {
+        if (!isSlotPlugged(bus, slot) && plugInSlot(bus, slot)) {
+            out = std::make_unique<ScpVBusPad>(bus, slot);
+            return FGC_OK;
+        }
+    }
+
+    CloseHandle(bus);
+    return FGC_ERR_CONTROLLER_LIMIT;
 }
 
 }  // namespace fgc

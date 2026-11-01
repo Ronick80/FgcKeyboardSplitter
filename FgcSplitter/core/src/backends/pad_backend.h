@@ -16,7 +16,10 @@ struct PadState {
     int16_t thumbLY = 0;
     int16_t thumbRX = 0;
     int16_t thumbRY = 0;
+
+    bool operator==(const PadState&) const = default;
 };
+static_assert(sizeof(PadState) == 12, "PadState must stay byte-compatible with XINPUT_GAMEPAD");
 
 // One virtual Xbox 360 controller. Destroying it unplugs it.
 class IVirtualPad {

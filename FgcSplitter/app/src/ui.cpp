@@ -1,5 +1,10 @@
 #include "ui.h"
 
+#include <windows.h>
+
+#include <cstdio>
+#include <initializer_list>
+
 #include "imgui.h"
 
 namespace {
@@ -8,6 +13,37 @@ const ImVec4 kGreen(0.35f, 0.85f, 0.45f, 1.0f);
 const ImVec4 kRed(0.95f, 0.40f, 0.40f, 1.0f);
 const ImVec4 kAmber(0.95f, 0.75f, 0.30f, 1.0f);
 const ImVec4 kGrey(0.65f, 0.65f, 0.65f, 1.0f);
+
+constexpr double kIdentifyTimeoutSeconds = 15.0;
+constexpr uint16_t kEscapeKey = 0x01;
+
+const char* const kInputNames[FGC_INPUT_COUNT] = {
+    "A",
+    "B",
+    "X",
+    "Y",
+    "Left bumper (LB)",
+    "Right bumper (RB)",
+    "Left trigger (LT)",
+    "Right trigger (RT)",
+    "Left stick click",
+    "Right stick click",
+    "Start",
+    "Back",
+    "Guide",
+    "D-pad up",
+    "D-pad down",
+    "D-pad left",
+    "D-pad right",
+    "Left stick up",
+    "Left stick down",
+    "Left stick left",
+    "Left stick right",
+    "Right stick up",
+    "Right stick down",
+    "Right stick left",
+    "Right stick right",
+};
 
 const char* describe(FgcResult result) {
     switch (result) {
@@ -33,15 +69,124 @@ const char* describe(FgcResult result) {
             return "I/O error";
         case FGC_ERR_INTERNAL:
             return "Internal error";
+        case FGC_ERR_ACCESS_DENIED:
+            return "Access denied (run as administrator)";
+        case FGC_ERR_DEVICE_BUSY:
+            return "Keyboard is in use by another program";
     }
     return "Unknown error";
+}
+
+// False when Windows has no name for the scan code.
+bool lookupKeyName(uint16_t keyCode, std::string& name) {
+    const LONG lParam =
+        static_cast<LONG>(((keyCode & 0xFFu) << 16) | ((keyCode & FGC_KEY_EXTENDED_FLAG) ? (1u << 24) : 0u));
+    wchar_t wide[64];
+    const int length = GetKeyNameTextW(lParam, wide, 64);
+    if (length <= 0) {
+        return false;
+    }
+    const int size = WideCharToMultiByte(CP_UTF8, 0, wide, length, nullptr, 0, nullptr, nullptr);
+    name.resize(static_cast<size_t>(size));
+    WideCharToMultiByte(CP_UTF8, 0, wide, length, name.data(), size, nullptr, nullptr);
+    return true;
 }
 
 }  // namespace
 
 AppUi::AppUi(FgcContext* context) : context_(context) {
+    mapping_.struct_size = sizeof(mapping_);
+    fgc_get_default_mapping(&mapping_);
+
+    // Scan codes 0x01-0x7F, plus the E0-prefixed set; skip codes Windows has no name for.
+    for (uint16_t base : {uint16_t{0}, uint16_t{FGC_KEY_EXTENDED_FLAG}}) {
+        for (uint16_t scan = 1; scan < 0x80; ++scan) {
+            const bool fakeShift = base != 0 && (scan == 0x2A || scan == 0x36);
+            std::string name;
+            if (!fakeShift && lookupKeyName(static_cast<uint16_t>(base | scan), name)) {
+                pickableKeys_.push_back(static_cast<uint16_t>(base | scan));
+            }
+        }
+    }
+
     refreshDrivers();
     refreshKeyboards();
+}
+
+const std::string& AppUi::keyName(uint16_t keyCode) {
+    const auto cached = keyNames_.find(keyCode);
+    if (cached != keyNames_.end()) {
+        return cached->second;
+    }
+
+    std::string name;
+    if (keyCode == FGC_KEY_UNBOUND) {
+        name = "(none)";
+    } else if (!lookupKeyName(keyCode, name)) {
+        char fallback[16];
+        snprintf(fallback, sizeof(fallback), "Key 0x%X", keyCode);
+        name = fallback;
+    }
+    return keyNames_.emplace(keyCode, std::move(name)).first->second;
+}
+
+void AppUi::onKeyDown(uint16_t keyCode) {
+    if (bindingInput_ < 0) {
+        return;
+    }
+    const int input = bindingInput_;
+    bindingInput_ = -1;
+    if (keyCode == kEscapeKey) {
+        return;
+    }
+    mapping_.key_for_input[input] = keyCode;
+    applyMapping();
+}
+
+void AppUi::applyMapping() {
+    if (selectedKeyboard_ < 0) {
+        return;
+    }
+    const FgcResult result = fgc_set_mapping(context_, keyboards_[selectedKeyboard_].hardware_id, &mapping_);
+    if (result != FGC_OK) {
+        actionMessage_ = std::string("Mapping: ") + describe(result);
+    }
+}
+
+void AppUi::selectKeyboard(int index) {
+    selectedKeyboard_ = index;
+    bindingInput_ = -1;
+    if (index >= 0) {
+        fgc_get_mapping(context_, keyboards_[index].hardware_id, &mapping_);
+    }
+}
+
+void AppUi::startIdentify() {
+    const FgcResult result = fgc_identify_begin(context_);
+    identifying_ = result == FGC_OK;
+    identifyStartedAt_ = ImGui::GetTime();
+    actionMessage_ = identifying_ ? std::string() : std::string("Identify: ") + describe(result);
+}
+
+void AppUi::pollIdentify() {
+    if (!identifying_) {
+        return;
+    }
+    int32_t index = -1;
+    const FgcResult result = fgc_identify_poll(context_, &index);
+    const bool timedOut = ImGui::GetTime() - identifyStartedAt_ > kIdentifyTimeoutSeconds;
+    if (result == FGC_OK && index < 0 && !timedOut) {
+        return;
+    }
+
+    fgc_identify_cancel(context_);
+    identifying_ = false;
+    if (index >= 0) {
+        loadKeyboardList();  // the core may have rescanned while resolving the keyboard
+        if (index < static_cast<int>(keyboards_.size())) {
+            selectKeyboard(index);
+        }
+    }
 }
 
 void AppUi::refreshDrivers() {
@@ -51,10 +196,13 @@ void AppUi::refreshDrivers() {
 }
 
 void AppUi::refreshKeyboards() {
-    keyboards_.clear();
-    selectedKeyboard_ = -1;
-
+    selectKeyboard(-1);
     keyboardsResult_ = fgc_refresh_keyboards(context_);
+    loadKeyboardList();
+}
+
+void AppUi::loadKeyboardList() {
+    keyboards_.clear();
     if (keyboardsResult_ != FGC_OK) {
         return;
     }
@@ -79,6 +227,7 @@ void AppUi::draw() {
     status_ = {};
     status_.struct_size = sizeof(status_);
     fgc_get_status(context_, &status_);
+    pollIdentify();
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
@@ -93,6 +242,8 @@ void AppUi::draw() {
         drawKeyboards();
         ImGui::Spacing();
         drawControls();
+        ImGui::Spacing();
+        drawMapping();
     }
     ImGui::End();
 }
@@ -151,24 +302,38 @@ void AppUi::drawDrivers() {
 void AppUi::drawKeyboards() {
     ImGui::SeparatorText("Keyboard");
 
+    const bool running = status_.running_sessions > 0;
+    ImGui::BeginDisabled(running);
+
     if (ImGui::Button("Refresh list")) {
         refreshKeyboards();
+    }
+    ImGui::SameLine();
+    if (identifying_) {
+        if (ImGui::Button("Cancel identify")) {
+            fgc_identify_cancel(context_);
+            identifying_ = false;
+        }
+    } else if (ImGui::Button("Identify by key press")) {
+        startIdentify();
+    }
+    if (identifying_) {
+        ImGui::TextColored(kAmber, "Press any key on the keyboard you want to use...");
     }
 
     if (keyboardsResult_ != FGC_OK) {
         ImGui::TextColored(kAmber, "Keyboard list unavailable: %s", describe(keyboardsResult_));
-        return;
-    }
-    if (keyboards_.empty()) {
+    } else if (keyboards_.empty()) {
         ImGui::TextColored(kGrey, "No keyboards found.");
-        return;
-    }
-
-    for (int i = 0; i < static_cast<int>(keyboards_.size()); ++i) {
-        if (ImGui::Selectable(keyboards_[i].display_name, selectedKeyboard_ == i)) {
-            selectedKeyboard_ = i;
+    } else {
+        for (int i = 0; i < static_cast<int>(keyboards_.size()); ++i) {
+            if (ImGui::Selectable(keyboards_[i].display_name, selectedKeyboard_ == i)) {
+                selectKeyboard(i);
+            }
         }
     }
+
+    ImGui::EndDisabled();
 }
 
 void AppUi::drawControls() {
@@ -192,7 +357,111 @@ void AppUi::drawControls() {
     }
     ImGui::EndDisabled();
 
+    ImGui::TextWrapped(
+        "While running, every key on the selected keyboard is hidden from other programs. If it is your only "
+        "keyboard, click Stop with the mouse.");
+
     if (!actionMessage_.empty()) {
         ImGui::TextUnformatted(actionMessage_.c_str());
     }
+}
+
+void AppUi::drawMapping() {
+    ImGui::SeparatorText("Mapping");
+
+    if (selectedKeyboard_ < 0) {
+        ImGui::TextColored(kGrey, "Select a keyboard to edit its mapping.");
+        return;
+    }
+
+    ImGui::TextWrapped(
+        "Click a key button, then press the new key (Esc cancels). Use \"...\" to pick from a list instead; "
+        "that also works while running, when the selected keyboard is hidden from this window. Changes apply "
+        "immediately.");
+
+    if (ImGui::Button("Reset to defaults")) {
+        fgc_get_default_mapping(&mapping_);
+        applyMapping();
+    }
+    ImGui::Spacing();
+
+    const auto drawGroup = [this](const char* title, std::initializer_list<FgcXboxInput> inputs) {
+        ImGui::SeparatorText(title);
+        for (const FgcXboxInput input : inputs) {
+            drawMappingRow(input);
+        }
+    };
+
+    if (ImGui::BeginTable("mapping", 2, ImGuiTableFlags_SizingStretchSame)) {
+        ImGui::TableNextColumn();
+        drawGroup("Face buttons", {FGC_INPUT_A, FGC_INPUT_B, FGC_INPUT_X, FGC_INPUT_Y});
+        drawGroup("Shoulders and triggers", {FGC_INPUT_LEFT_BUMPER, FGC_INPUT_RIGHT_BUMPER, FGC_INPUT_LEFT_TRIGGER,
+                                             FGC_INPUT_RIGHT_TRIGGER});
+        drawGroup("Menu", {FGC_INPUT_START, FGC_INPUT_BACK, FGC_INPUT_GUIDE});
+        drawGroup("Stick clicks", {FGC_INPUT_LEFT_STICK_CLICK, FGC_INPUT_RIGHT_STICK_CLICK});
+
+        ImGui::TableNextColumn();
+        drawGroup("D-pad", {FGC_INPUT_DPAD_UP, FGC_INPUT_DPAD_DOWN, FGC_INPUT_DPAD_LEFT, FGC_INPUT_DPAD_RIGHT});
+        drawGroup("Left stick", {FGC_INPUT_LEFT_STICK_UP, FGC_INPUT_LEFT_STICK_DOWN, FGC_INPUT_LEFT_STICK_LEFT,
+                                 FGC_INPUT_LEFT_STICK_RIGHT});
+        drawGroup("Right stick", {FGC_INPUT_RIGHT_STICK_UP, FGC_INPUT_RIGHT_STICK_DOWN, FGC_INPUT_RIGHT_STICK_LEFT,
+                                  FGC_INPUT_RIGHT_STICK_RIGHT});
+        ImGui::EndTable();
+    }
+}
+
+void AppUi::drawMappingRow(FgcXboxInput input) {
+    const float font = ImGui::GetFontSize();
+    const uint16_t key = mapping_.key_for_input[input];
+    const bool binding = bindingInput_ == static_cast<int>(input);
+
+    bool shared = false;
+    for (int other = 0; other < FGC_INPUT_COUNT; ++other) {
+        shared = shared || (other != static_cast<int>(input) && key != FGC_KEY_UNBOUND &&
+                            mapping_.key_for_input[other] == key);
+    }
+
+    ImGui::PushID(static_cast<int>(input));
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(kInputNames[input]);
+    ImGui::SameLine(font * 10.0f);
+
+    if (shared) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kAmber);
+    }
+    const std::string label = binding ? std::string("Press a key...") : keyName(key);
+    if (ImGui::Button(label.c_str(), ImVec2(font * 8.0f, 0))) {
+        bindingInput_ = binding ? -1 : static_cast<int>(input);
+    }
+    if (shared) {
+        ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("This key is also bound to another input.");
+        }
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button("...")) {
+        ImGui::OpenPopup("pick");
+    }
+    if (ImGui::BeginPopup("pick")) {
+        if (ImGui::Selectable("(none)", key == FGC_KEY_UNBOUND)) {
+            mapping_.key_for_input[input] = FGC_KEY_UNBOUND;
+            applyMapping();
+        }
+        ImGui::Separator();
+        ImGui::BeginChild("keys", ImVec2(font * 14.0f, font * 16.0f));
+        for (const uint16_t code : pickableKeys_) {
+            ImGui::PushID(code);
+            if (ImGui::Selectable(keyName(code).c_str(), key == code)) {
+                mapping_.key_for_input[input] = code;
+                applyMapping();
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndChild();
+        ImGui::EndPopup();
+    }
+    ImGui::PopID();
 }

@@ -53,7 +53,9 @@ typedef enum FgcResult {
     FGC_ERR_CONTROLLER_LIMIT = 7,
     FGC_ERR_NOT_FOUND = 8,
     FGC_ERR_IO = 9,
-    FGC_ERR_INTERNAL = 10
+    FGC_ERR_INTERNAL = 10,
+    FGC_ERR_ACCESS_DENIED = 11,
+    FGC_ERR_DEVICE_BUSY = 12 /* another process already holds the keyboard */
 } FgcResult;
 
 typedef enum FgcInterceptionState {
@@ -168,16 +170,18 @@ FGC_API FgcResult fgc_refresh_keyboards(FgcContext* context);
 FGC_API FgcResult fgc_get_keyboard_count(FgcContext* context, uint32_t* out_count);
 /* [control] Reads the cached list from the last refresh. */
 FGC_API FgcResult fgc_get_keyboard(FgcContext* context, uint32_t index, FgcKeyboardInfo* out_info);
-/* [control] Starts listening for a keypress on any keyboard to identify it. */
+/* [control] Starts watching all idle keyboards; their keys still reach Windows normally. */
 FGC_API FgcResult fgc_identify_begin(FgcContext* context);
 /* [control] Stops identify mode. */
 FGC_API FgcResult fgc_identify_cancel(FgcContext* context);
-/* [lock-free] Sets *out_index to the identified keyboard's list index, or -1 if none yet. */
+/* [control] Sets *out_index to the identified keyboard's list index, or -1 if no key was pressed yet. */
 FGC_API FgcResult fgc_identify_poll(FgcContext* context, int32_t* out_index);
 
 /* Mapping (live: takes effect on a running session without stalling input) */
 
-/* [control] */
+/* [lock-free] Fills the mapping used for keyboards that have none of their own. */
+FGC_API FgcResult fgc_get_default_mapping(FgcMapping* out_mapping);
+/* [control] Returns the default mapping for a keyboard that has none set. */
 FGC_API FgcResult fgc_get_mapping(FgcContext* context, const char* hardware_id, FgcMapping* out_mapping);
 /* [control] */
 FGC_API FgcResult fgc_set_mapping(FgcContext* context, const char* hardware_id, const FgcMapping* mapping);

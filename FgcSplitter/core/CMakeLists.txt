@@ -8,6 +8,12 @@ add_library(FgcCore SHARED
     src/backends/interception_keyboard.cpp
     src/backends/scpvbus_pad.h
     src/backends/scpvbus_pad.cpp
+    src/engine/mapping_session.h
+    src/engine/mapping_session.cpp
+    src/engine/mapping_table.h
+    src/engine/mapping_table.cpp
+    src/engine/pad_state.h
+    src/engine/pad_state.cpp
 )
 
 target_include_directories(FgcCore
@@ -17,4 +23,4 @@ target_include_directories(FgcCore
 
 target_compile_definitions(FgcCore PRIVATE FGC_CORE_BUILD NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
 target_compile_options(FgcCore PRIVATE /W4 /permissive- /utf-8)
-target_link_libraries(FgcCore PRIVATE setupapi version advapi32)
+target_link_libraries(FgcCore PRIVATE setupapi version advapi32 avrt)

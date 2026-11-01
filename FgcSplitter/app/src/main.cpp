@@ -20,6 +20,7 @@ ID3D11RenderTargetView* g_renderTarget = nullptr;
 bool g_swapChainOccluded = false;
 UINT g_resizeWidth = 0;
 UINT g_resizeHeight = 0;
+AppUi* g_ui = nullptr;
 
 void createRenderTarget() {
     ID3D11Texture2D* backBuffer = nullptr;
@@ -95,6 +96,14 @@ LRESULT WINAPI windowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 return 0;
             }
             break;
+        case WM_KEYDOWN:
+        case WM_SYSKEYDOWN:
+            // Bit 30 is set for auto-repeat; bit 24 marks E0-prefixed keys.
+            if (g_ui && (lParam & (1 << 30)) == 0) {
+                const unsigned extended = (lParam & (1 << 24)) ? FGC_KEY_EXTENDED_FLAG : 0u;
+                g_ui->onKeyDown(static_cast<uint16_t>(((lParam >> 16) & 0xFF) | extended));
+            }
+            break;
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
@@ -120,7 +129,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
                                nullptr, nullptr, nullptr, nullptr, L"FgcSplitterWindow", nullptr};
     RegisterClassExW(&windowClass);
     const HWND hwnd = CreateWindowW(windowClass.lpszClassName, L"FGC Keyboard Splitter", WS_OVERLAPPEDWINDOW, 100, 100,
-                                    static_cast<int>(720 * dpiScale), static_cast<int>(640 * dpiScale), nullptr,
+                                    static_cast<int>(800 * dpiScale), static_cast<int>(960 * dpiScale), nullptr,
                                     nullptr, instance, nullptr);
 
     if (!createDevice(hwnd)) {
@@ -146,6 +155,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     {
         AppUi ui(core);
+        g_ui = &ui;
 
         bool done = false;
         while (!done) {
@@ -189,6 +199,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
             const HRESULT presentResult = g_swapChain->Present(1, 0);
             g_swapChainOccluded = presentResult == DXGI_STATUS_OCCLUDED;
         }
+        g_ui = nullptr;
     }
 
     fgc_destroy(core);

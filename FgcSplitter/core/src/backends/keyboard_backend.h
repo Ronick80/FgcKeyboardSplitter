@@ -38,6 +38,15 @@ public:
     virtual void interrupt() noexcept = 0;
 };
 
+// Reports which keyboard produces the next key press. Key presses still reach Windows unchanged.
+class IIdentifySession {
+public:
+    virtual ~IIdentifySession() = default;
+
+    // Non-blocking. True once a key press was seen, with that keyboard's hardware ID.
+    virtual bool poll(std::string& hardwareId) = 0;
+};
+
 class IKeyboardInput {
 public:
     virtual ~IKeyboardInput() = default;
@@ -45,6 +54,7 @@ public:
     virtual DriverState driverState() const = 0;
     virtual FgcResult enumerate(std::vector<KeyboardDevice>& out) = 0;
     virtual FgcResult open(const std::string& hardwareId, std::unique_ptr<IKeyboardSession>& out) = 0;
+    virtual FgcResult beginIdentify(std::unique_ptr<IIdentifySession>& out) = 0;
 };
 
 }  // namespace fgc
