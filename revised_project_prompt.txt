@@ -1,0 +1,72 @@
+Build a C++ Windows application that converts input from one physical keyboard into input on one virtual Xbox 360 controller. It is meant for fighting games, so input latency and accuracy matter more than anything else.
+
+## Reference project
+KeyboardSplitterXbox/ is a C# reference only. Do not port its code or architecture. Use it to learn:
+- How it captures per-keyboard input and blocks it from other apps (Interceptor/, which wraps the Interception driver).
+- How it creates and feeds a virtual Xbox 360 controller (VirtualXbox/, which talks to the bundled ScpVBus driver).
+- How it counts already-connected controllers (XInputWrapper/).
+The reference has a poor UI and slow input mapping. Inputs are delayed or get stuck. Do not repeat those problems.
+I will delete KeyboardSplitterXbox/ once the new app works, so the new app must not depend on any file inside it. Copy the driver files you need into the new project.
+
+## Tech stack
+- Language: C++20, MSVC, x64.
+- Build: CMake. Put the new app in its own top-level folder, outside KeyboardSplitterXbox/.
+- UI: Dear ImGui with Win32 + DirectX 11 backends. This is a first iteration to test usability. I may swap in Qt, C#, or another front end later.
+- Architecture: two CMake targets.
+  - `FgcCore`: a shared library (DLL) with the keyboard backend, virtual-pad backend, mapping engine and threads, profile storage, driver detection, controller-limit check, and latency stats. It must not depend on any UI code or UI types.
+  - `FgcApp`: the Dear ImGui front end. It talks to `FgcCore` only through the public C API, the same way a future C# or Qt front end would. It must not include any core internal headers, and it must not contain mapping, profile, or driver logic.
+- Keyboard capture and blocking: Interception driver via its C API.
+- Virtual controller: the ScpVBus virtual Xbox 360 driver, as in the reference.
+- Inside `FgcCore`, put the keyboard backend and the virtual-controller backend behind small interfaces (for example `IKeyboardInput` and `IVirtualPad`). The mapping engine must not depend on Interception or ScpVBus directly.
+- Profiles: JSON (nlohmann/json), stored in %APPDATA%\FgcKeyboardSplitter\profiles.
+- Dependencies: fetch with CMake FetchContent or vendor them. Do not rely on manually installed libraries.
+
+## Core API (FgcCore)
+- A single public header, `fgc_core.h`, with `extern "C"` functions, plain-old-data structs, and opaque handles. No STL types, no exceptions, and no C++ classes across the boundary.
+- Include an API version number and explicit struct sizes or version fields so the ABI can evolve.
+- It must be usable from C# via P/Invoke without a wrapper layer. Use stdcall or cdecl consistently, and UTF-8 or UTF-16 strings with a documented ownership rule.
+- The API covers: driver status, listing keyboards (with stable hardware IDs), identify-by-keypress, get/set the mapping, profile list/load/save/rename/delete, controller-limit check, start/stop, live status, and latency stats.
+- The UI never receives callbacks from mapping threads. Mapping threads publish status and events into a lock-free snapshot or queue, and the UI polls it.
+- Document the thread-safety rules for each function.
+- Document the profile file format as part of the core, so other front ends can read the same files.
+
+## Functional requirements
+1. Take input from one selected keyboard and map it to one virtual Xbox controller. While mapping is running, that keyboard's input must be hidden from all other applications.
+2. Mapping begins only when the user clicks "Start" and ends on "Stop". Closing the app must also stop mapping and restore normal keyboard behavior.
+3. The UI must:
+   - list the connected keyboards and let the user pick one (with a "press a key on the keyboard to identify it" option);
+   - let the user map keys to every Xbox input: A/B/X/Y, D-pad, bumpers, triggers, stick clicks, Start/Back, and both analog sticks;
+   - clearly show whether mapping is running or stopped.
+4. Profiles:
+   - Save, load, rename, and delete mapping profiles.
+   - Each keyboard has its own profile, identified by a stable hardware ID.
+   - Auto-load the last profile for a keyboard when it is selected.
+5. Controller limit:
+   - Windows supports at most 4 XInput controllers.
+   - Before starting, count the physical controllers already connected plus the virtual controllers the active mappings would create.
+   - Refuse to start and show a clear message if the total exceeds 4.
+6. Driver setup:
+   - Detect whether Interception and ScpVBus are installed.
+   - Show clear instructions, or an install button that requests admin rights, if either is missing.
+
+## Performance requirements
+- Each active keyboard has its own dedicated mapping thread, separate from the GUI thread.
+- Mapping threads run at high priority (THREAD_PRIORITY_HIGHEST or TIME_CRITICAL, with MMCSS if appropriate).
+- The hot path must not allocate memory, take blocking locks, do file or console I/O, or log synchronously.
+- Share the mapping config with the thread through a lock-free or double-buffered structure. The GUI must be able to change it live without stalling input.
+- Wait for input with a blocking or event-based wait, not sleep-polling.
+- Send each state change to the virtual controller immediately. Do not batch changes or poll on a timer.
+- Each key's up/down state must be tracked exactly, so no inputs get stuck. Examples: opposing directions (SOCD handling), and key-up events while the app loses focus or the device disconnects.
+- On Stop, device disconnect, or crash, reset the virtual controller to neutral and release the keyboard.
+- Include a latency measurement (a debug counter or overlay) so I can check the end-to-end delay.
+
+## Milestones
+Work through these in order. Stop after each one with a summary and wait for my confirmation before starting the next.
+1. Project skeleton: CMake build with the `FgcCore` and `FgcApp` targets, the public header with stubbed functions, an ImGui window that calls it, driver detection, and the backend interfaces.
+2. End-to-end path: one keyboard to one virtual controller, with a hardcoded mapping, a mapping thread, and Start/Stop, implemented inside `FgcCore` and driven from the UI through the API. Keep the keyboard blocking and the neutral-state reset correct.
+3. Mapping UI: select a keyboard, remap every Xbox input, and apply changes live. UI code only uses the public API.
+4. Profiles: per-keyboard save/load/rename/delete and auto-load. Profile logic lives in `FgcCore`, not in the UI.
+5. Controller-limit check, multi-keyboard support (one thread per keyboard), and the latency overlay.
+6. Polish and hardening: stuck-key and disconnect handling, error messages, and the README (build steps, driver installation, usage). Also add a minimal non-ImGui test client (a console app or a small C# program) that calls the API to start and stop mapping, to prove another front end can use it.
+
+Explain any deviation from this spec.

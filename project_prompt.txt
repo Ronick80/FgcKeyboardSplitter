@@ -1,0 +1,17 @@
+This project is meant to be a cpp application that can convert keyboard input into xbox controller input in windows. I have included the source code of a reference project
+that attempts to do the same thing. This source code is in the KeyboardSplitterXbox project. From my own understanding of the project it maps keyboard input to a virtual
+xbox controller driver (aka xinput) and blocks the keyboard input from being redirected towards any other applications while the program is running
+
+For this project here are the requirements:
+- take input from one keyboard and map it to one xbox controller in windows. The input from this keyboard should now be hidden from all other apps
+- the input mapping should only start once the user "starts" the process similar to the reference project
+- an intuitive UI that allows selecting a keyboard to convert and mapping of keys to each xbox input.
+- Should allow saveable profiles for input mapping for each keyboard
+- The input mapping needs to have performance considered above all else. Each keybaord's input should have the mapping occuring in it's own thread separate from the GUI.
+  Preferably the threads will be running in high priority.
+- Only 4 xbox controllers can be enumerated through windows so the app needs to make sure that the keyboard translations + connected xbox controllers don't exceed 4 before starting. The reference app does this as well.
+
+Remember that the KeyboardSplitter app I provided is meant only for reference for how to achieve the mapping to a virtual xbox controller. The reason I want to make a new app is the reference has
+a pretty poorly designed UI and the performance of input mapping is very poor. This app I'm creating is meant to be used for fighting games where the input mapping needs to occur
+as quickly and accurately as possible. The reference app would have numerous issues where inputs would have long delays before being mapped or stick in weird ways. When this project
+is functioning properly I will remove the KeyboardSplitterXbox directory from it as the reference will no longer be needed.
