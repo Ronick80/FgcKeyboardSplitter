@@ -1,0 +1,233 @@
+/*
+ * FgcCore public C API.
+ *
+ * Conventions
+ *  - Plain C ABI: no STL types, no exceptions, no C++ classes cross the boundary.
+ *  - All strings are UTF-8, NUL-terminated, and live in caller-provided buffers or
+ *    fixed-size struct fields. The library never hands out memory the caller must free.
+ *  - Every struct passed in or out begins with `struct_size`. The caller sets it to
+ *    sizeof(struct) before the call. The library rejects a struct smaller than it expects,
+ *    and a future version may append fields only after the existing ones.
+ *  - Mapping threads never call back into the caller. Status and events are polled.
+ *
+ * Thread safety (labels used on each function)
+ *  - [control]   Safe from any thread. Serialized internally by the control lock. Never
+ *                taken by mapping threads, so it cannot stall input.
+ *  - [lock-free] Safe from any thread, concurrently with everything else, never blocks.
+ *  - [create]    Not safe to call concurrently with any other call on the same context.
+ *
+ * API stability: version 1 is provisional until milestone 6 completes.
+ */
+#ifndef FGC_CORE_H
+#define FGC_CORE_H
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#if defined(FGC_CORE_BUILD)
+#define FGC_API __declspec(dllexport)
+#else
+#define FGC_API __declspec(dllimport)
+#endif
+
+#define FGC_API_VERSION 1u
+
+#define FGC_MAX_XINPUT_CONTROLLERS 4u
+#define FGC_HARDWARE_ID_MAX 256u
+#define FGC_DISPLAY_NAME_MAX 128u
+#define FGC_PROFILE_NAME_MAX 64u
+
+typedef struct FgcContext FgcContext;
+
+typedef enum FgcResult {
+    FGC_OK = 0,
+    FGC_ERR_INVALID_ARGUMENT = 1,
+    FGC_ERR_NOT_IMPLEMENTED = 2,
+    FGC_ERR_BUFFER_TOO_SMALL = 3,
+    FGC_ERR_DRIVER_MISSING = 4,
+    FGC_ERR_ALREADY_RUNNING = 5,
+    FGC_ERR_NOT_RUNNING = 6,
+    FGC_ERR_CONTROLLER_LIMIT = 7,
+    FGC_ERR_NOT_FOUND = 8,
+    FGC_ERR_IO = 9,
+    FGC_ERR_INTERNAL = 10
+} FgcResult;
+
+typedef enum FgcInterceptionState {
+    FGC_INTERCEPTION_NOT_INSTALLED = 0,
+    FGC_INTERCEPTION_REBOOT_REQUIRED = 1,
+    FGC_INTERCEPTION_INSTALLED = 2
+} FgcInterceptionState;
+
+typedef struct FgcDriverStatus {
+    uint32_t struct_size;
+    FgcInterceptionState interception;
+    int32_t scpvbus_installed; /* nonzero when the ScpVBus bus device is present */
+} FgcDriverStatus;
+
+/* Xbox inputs a key can be bound to. Analog directions are held at full deflection. */
+typedef enum FgcXboxInput {
+    FGC_INPUT_A = 0,
+    FGC_INPUT_B,
+    FGC_INPUT_X,
+    FGC_INPUT_Y,
+    FGC_INPUT_LEFT_BUMPER,
+    FGC_INPUT_RIGHT_BUMPER,
+    FGC_INPUT_LEFT_TRIGGER,
+    FGC_INPUT_RIGHT_TRIGGER,
+    FGC_INPUT_LEFT_STICK_CLICK,
+    FGC_INPUT_RIGHT_STICK_CLICK,
+    FGC_INPUT_START,
+    FGC_INPUT_BACK,
+    FGC_INPUT_GUIDE,
+    FGC_INPUT_DPAD_UP,
+    FGC_INPUT_DPAD_DOWN,
+    FGC_INPUT_DPAD_LEFT,
+    FGC_INPUT_DPAD_RIGHT,
+    FGC_INPUT_LEFT_STICK_UP,
+    FGC_INPUT_LEFT_STICK_DOWN,
+    FGC_INPUT_LEFT_STICK_LEFT,
+    FGC_INPUT_LEFT_STICK_RIGHT,
+    FGC_INPUT_RIGHT_STICK_UP,
+    FGC_INPUT_RIGHT_STICK_DOWN,
+    FGC_INPUT_RIGHT_STICK_LEFT,
+    FGC_INPUT_RIGHT_STICK_RIGHT,
+    FGC_INPUT_COUNT
+} FgcXboxInput;
+
+/* Key code = set-1 scan code, with bit 8 (0x100) set for E0-prefixed keys. 0 = unbound. */
+#define FGC_KEY_UNBOUND 0u
+#define FGC_KEY_EXTENDED_FLAG 0x100u
+
+typedef struct FgcMapping {
+    uint32_t struct_size;
+    uint16_t key_for_input[FGC_INPUT_COUNT];
+} FgcMapping;
+
+typedef struct FgcKeyboardInfo {
+    uint32_t struct_size;
+    char hardware_id[FGC_HARDWARE_ID_MAX]; /* stable across reboots and ports where possible */
+    char display_name[FGC_DISPLAY_NAME_MAX];
+} FgcKeyboardInfo;
+
+typedef struct FgcControllerLimit {
+    uint32_t struct_size;
+    uint32_t physical_connected;
+    uint32_t virtual_active;
+    uint32_t virtual_requested;
+    int32_t allowed; /* nonzero when physical + active + requested <= 4 */
+} FgcControllerLimit;
+
+typedef struct FgcStatus {
+    uint32_t struct_size;
+    uint32_t running_sessions;
+} FgcStatus;
+
+typedef enum FgcEventType {
+    FGC_EVENT_NONE = 0,
+    FGC_EVENT_KEYBOARD_DISCONNECTED = 1,
+    FGC_EVENT_SESSION_FAULTED = 2
+} FgcEventType;
+
+typedef struct FgcEvent {
+    uint32_t struct_size;
+    FgcEventType type;
+    char hardware_id[FGC_HARDWARE_ID_MAX];
+} FgcEvent;
+
+typedef struct FgcLatencyStats {
+    uint32_t struct_size;
+    uint64_t sample_count;
+    uint64_t last_ns;
+    uint64_t average_ns;
+    uint64_t max_ns;
+} FgcLatencyStats;
+
+/* Lifetime */
+
+/* [lock-free] */
+FGC_API uint32_t fgc_get_api_version(void);
+/* [create] Creates a context. Destroy it with fgc_destroy. */
+FGC_API FgcResult fgc_create(FgcContext** out_context);
+/* [create] Stops all sessions, restores keyboards, and releases the context. */
+FGC_API void fgc_destroy(FgcContext* context);
+
+/* Drivers */
+
+/* [control] Queries the system on every call, so call it on demand rather than per frame. */
+FGC_API FgcResult fgc_get_driver_status(FgcContext* context, FgcDriverStatus* out_status);
+
+/* Keyboards */
+
+/* [control] Rescans devices and replaces the cached list. */
+FGC_API FgcResult fgc_refresh_keyboards(FgcContext* context);
+/* [control] Reads the cached list from the last refresh. */
+FGC_API FgcResult fgc_get_keyboard_count(FgcContext* context, uint32_t* out_count);
+/* [control] Reads the cached list from the last refresh. */
+FGC_API FgcResult fgc_get_keyboard(FgcContext* context, uint32_t index, FgcKeyboardInfo* out_info);
+/* [control] Starts listening for a keypress on any keyboard to identify it. */
+FGC_API FgcResult fgc_identify_begin(FgcContext* context);
+/* [control] Stops identify mode. */
+FGC_API FgcResult fgc_identify_cancel(FgcContext* context);
+/* [lock-free] Sets *out_index to the identified keyboard's list index, or -1 if none yet. */
+FGC_API FgcResult fgc_identify_poll(FgcContext* context, int32_t* out_index);
+
+/* Mapping (live: takes effect on a running session without stalling input) */
+
+/* [control] */
+FGC_API FgcResult fgc_get_mapping(FgcContext* context, const char* hardware_id, FgcMapping* out_mapping);
+/* [control] */
+FGC_API FgcResult fgc_set_mapping(FgcContext* context, const char* hardware_id, const FgcMapping* mapping);
+
+/* Profiles (stored per keyboard hardware ID) */
+
+/* [control] */
+FGC_API FgcResult fgc_profile_count(FgcContext* context, const char* hardware_id, uint32_t* out_count);
+/* [control] */
+FGC_API FgcResult fgc_profile_get_name(FgcContext* context, const char* hardware_id, uint32_t index,
+                                       char* out_name, uint32_t out_name_size);
+/* [control] Also marks the profile as last used for this keyboard. */
+FGC_API FgcResult fgc_profile_load(FgcContext* context, const char* hardware_id, const char* name,
+                                   FgcMapping* out_mapping);
+/* [control] Also marks the profile as last used for this keyboard. */
+FGC_API FgcResult fgc_profile_save(FgcContext* context, const char* hardware_id, const char* name,
+                                   const FgcMapping* mapping);
+/* [control] */
+FGC_API FgcResult fgc_profile_rename(FgcContext* context, const char* hardware_id, const char* old_name,
+                                     const char* new_name);
+/* [control] */
+FGC_API FgcResult fgc_profile_delete(FgcContext* context, const char* hardware_id, const char* name);
+/* [control] Returns FGC_ERR_NOT_FOUND when the keyboard has no last-used profile. */
+FGC_API FgcResult fgc_profile_get_last_used(FgcContext* context, const char* hardware_id, char* out_name,
+                                            uint32_t out_name_size);
+
+/* Controller limit */
+
+/* [control] Counts physical controllers and active virtual pads, plus the pads about to be added. */
+FGC_API FgcResult fgc_check_controller_limit(FgcContext* context, uint32_t virtual_requested,
+                                             FgcControllerLimit* out_limit);
+
+/* Sessions */
+
+/* [control] Fails with FGC_ERR_CONTROLLER_LIMIT if the 4-controller cap would be exceeded. */
+FGC_API FgcResult fgc_start(FgcContext* context, const char* hardware_id);
+/* [control] Resets the virtual pad to neutral and releases the keyboard. */
+FGC_API FgcResult fgc_stop(FgcContext* context, const char* hardware_id);
+/* [control] */
+FGC_API FgcResult fgc_stop_all(FgcContext* context);
+/* [lock-free] */
+FGC_API FgcResult fgc_get_status(FgcContext* context, FgcStatus* out_status);
+/* [lock-free] Pops one event; out_event->type is FGC_EVENT_NONE when the queue is empty. */
+FGC_API FgcResult fgc_poll_event(FgcContext* context, FgcEvent* out_event);
+/* [lock-free] */
+FGC_API FgcResult fgc_get_latency_stats(FgcContext* context, const char* hardware_id,
+                                        FgcLatencyStats* out_stats);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* FGC_CORE_H */
