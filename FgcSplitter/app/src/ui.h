@@ -40,6 +40,10 @@ private:
     void drawMapping();
     void drawMappingRow(FgcXboxInput input);
     void drawProfiles();
+    void updateRunning();
+    void refreshLimit();
+    void drawLatency();
+    bool selectedRunning() const;
     void refreshProfiles();
     void loadProfile(const std::string& name);
     bool saveProfile(const std::string& name);
@@ -70,5 +74,8 @@ private:
     double identifyStartedAt_ = 0.0;
 
     FgcStatus status_{};
+    std::vector<char> runningFlags_;  // parallel to keyboards_
+    FgcControllerLimit limit_{};      // with room for one more pad
+    double limitCheckedAt_ = -10.0;
     std::string actionMessage_;
 };

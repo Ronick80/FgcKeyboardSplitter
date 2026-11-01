@@ -1,6 +1,9 @@
 #include "fgc_core.h"
 
+#include <windows.h>
+
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -11,6 +14,7 @@
 #include "backends/interception_keyboard.h"
 #include "backends/scpvbus_pad.h"
 #include "context.h"
+#include "engine/controller_limit.h"
 
 namespace {
 
@@ -80,6 +84,32 @@ FgcResult copyName(const std::string& name, char* out, uint32_t size) {
     return FGC_OK;
 }
 
+// Windows needs a moment to list a freshly plugged pad, so a young pad is not yet subtracted from the
+// XInput count; that errs toward refusing a start rather than allowing a fifth controller.
+constexpr std::chrono::seconds kPadSettleTime{3};
+
+// Caller holds the control lock.
+FgcControllerLimit limitFor(const FgcContext& context, uint32_t requested) {
+    const auto now = std::chrono::steady_clock::now();
+    uint32_t settled = 0;
+    for (const auto& entry : context.sessions) {
+        if (now - entry.second->startedAt() >= kPadSettleTime) {
+            ++settled;
+        }
+    }
+    return fgc::computeControllerLimit(context.counter->connected(), static_cast<uint32_t>(context.sessions.size()),
+                                       settled, requested);
+}
+
+uint64_t ticksToNanoseconds(uint64_t ticks) {
+    static const uint64_t frequency = [] {
+        LARGE_INTEGER value;
+        QueryPerformanceFrequency(&value);
+        return static_cast<uint64_t>(value.QuadPart);
+    }();
+    return ticks * 1'000'000'000ull / frequency;
+}
+
 // False when a key code is outside the range a mapping can hold.
 bool toKeys(const FgcMapping& mapping, fgc::KeyArray& keys) {
     for (size_t i = 0; i < keys.size(); ++i) {
@@ -108,6 +138,7 @@ FGC_API FgcResult fgc_create(FgcContext** out_context) {
         auto context = std::make_unique<FgcContext>();
         context->keyboard = std::make_unique<fgc::InterceptionKeyboardInput>();
         context->padBus = std::make_unique<fgc::ScpVBusPadBus>();
+        context->counter = std::make_unique<fgc::XInputControllerCounter>();
         *out_context = context.release();
         return FGC_OK;
     });
@@ -368,11 +399,16 @@ FGC_API FgcResult fgc_profile_get_last_used(FgcContext* context, const char* har
     });
 }
 
-FGC_API FgcResult fgc_check_controller_limit(FgcContext* context, uint32_t, FgcControllerLimit* out_limit) {
+FGC_API FgcResult fgc_check_controller_limit(FgcContext* context, uint32_t virtual_requested,
+                                             FgcControllerLimit* out_limit) {
     if (!context || !validStruct(out_limit)) {
         return FGC_ERR_INVALID_ARGUMENT;
     }
-    return FGC_ERR_NOT_IMPLEMENTED;
+    return guarded([&] {
+        std::lock_guard<std::mutex> lock(context->controlLock);
+        *out_limit = limitFor(*context, virtual_requested);
+        return FGC_OK;
+    });
 }
 
 FGC_API FgcResult fgc_start(FgcContext* context, const char* hardware_id) {
@@ -393,6 +429,9 @@ FGC_API FgcResult fgc_start(FgcContext* context, const char* hardware_id) {
 
         if (context->keyboard->driverState() != fgc::DriverState::Installed || !context->padBus->isAvailable()) {
             return FGC_ERR_DRIVER_MISSING;
+        }
+        if (!limitFor(*context, 1).allowed) {
+            return FGC_ERR_CONTROLLER_LIMIT;
         }
 
         // Plug the pad in before capturing, so no keystroke is swallowed without a pad to receive it.
@@ -460,12 +499,51 @@ FGC_API FgcResult fgc_poll_event(FgcContext* context, FgcEvent* out_event) {
     return FGC_OK;
 }
 
+FGC_API FgcResult fgc_is_running(FgcContext* context, const char* hardware_id, int32_t* out_running) {
+    if (!context || !hardware_id || !out_running) {
+        return FGC_ERR_INVALID_ARGUMENT;
+    }
+    return guarded([&] {
+        std::lock_guard<std::mutex> lock(context->controlLock);
+        const auto session = context->sessions.find(hardware_id);
+        *out_running = session != context->sessions.end() && !session->second->finished() ? 1 : 0;
+        return FGC_OK;
+    });
+}
+
 FGC_API FgcResult fgc_get_latency_stats(FgcContext* context, const char* hardware_id,
                                         FgcLatencyStats* out_stats) {
     if (!context || !hardware_id || !validStruct(out_stats)) {
         return FGC_ERR_INVALID_ARGUMENT;
     }
-    return FGC_ERR_NOT_IMPLEMENTED;
+    return guarded([&] {
+        std::lock_guard<std::mutex> lock(context->controlLock);
+        const auto session = context->sessions.find(hardware_id);
+        if (session == context->sessions.end()) {
+            return FGC_ERR_NOT_RUNNING;
+        }
+        const fgc::LatencySnapshot snapshot = session->second->latency();
+        out_stats->sample_count = snapshot.samples;
+        out_stats->last_ns = ticksToNanoseconds(snapshot.lastTicks);
+        out_stats->average_ns = ticksToNanoseconds(snapshot.averageTicks);
+        out_stats->max_ns = ticksToNanoseconds(snapshot.maxTicks);
+        return FGC_OK;
+    });
+}
+
+FGC_API FgcResult fgc_reset_latency_stats(FgcContext* context, const char* hardware_id) {
+    if (!context || !hardware_id) {
+        return FGC_ERR_INVALID_ARGUMENT;
+    }
+    return guarded([&] {
+        std::lock_guard<std::mutex> lock(context->controlLock);
+        const auto session = context->sessions.find(hardware_id);
+        if (session == context->sessions.end()) {
+            return FGC_ERR_NOT_RUNNING;
+        }
+        session->second->resetLatency();
+        return FGC_OK;
+    });
 }
 
 }  // extern "C"

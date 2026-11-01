@@ -73,6 +73,25 @@ void MappingSession::stop() {
     }
 }
 
+LatencySnapshot MappingSession::latency() const noexcept {
+    LatencySnapshot snapshot;
+    snapshot.samples = latencySamples_.load(std::memory_order_relaxed);
+    snapshot.lastTicks = latencyLastTicks_.load(std::memory_order_relaxed);
+    snapshot.maxTicks = latencyMaxTicks_.load(std::memory_order_relaxed);
+    if (snapshot.samples > 0) {
+        snapshot.averageTicks = latencySumTicks_.load(std::memory_order_relaxed) / snapshot.samples;
+    }
+    return snapshot;
+}
+
+void MappingSession::resetLatency() noexcept {
+    latencyResets_.fetch_add(1, std::memory_order_relaxed);
+    latencySamples_.store(0, std::memory_order_relaxed);
+    latencySumTicks_.store(0, std::memory_order_relaxed);
+    latencyLastTicks_.store(0, std::memory_order_relaxed);
+    latencyMaxTicks_.store(0, std::memory_order_relaxed);
+}
+
 void MappingSession::run() noexcept {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
 
@@ -85,6 +104,10 @@ void MappingSession::run() noexcept {
     KeyBits keysDown{};
     PadState submitted;
     KeyEvent event;
+    uint64_t samples = 0;
+    uint64_t sumTicks = 0;
+    uint64_t maxTicks = 0;
+    uint32_t seenResets = 0;
 
     while (keyboard_->wait(event) == WaitResult::Event) {
         const size_t key = event.keyCode;
@@ -117,6 +140,25 @@ void MappingSession::run() noexcept {
         }
         if (pad_->submit(state) == FGC_OK) {
             submitted = state;
+
+            LARGE_INTEGER done;
+            QueryPerformanceCounter(&done);
+            if (event.timestampQpc > 0) {
+                const uint64_t ticks =
+                    done.QuadPart > event.timestampQpc ? static_cast<uint64_t>(done.QuadPart - event.timestampQpc) : 0;
+                const uint32_t resets = latencyResets_.load(std::memory_order_relaxed);
+                if (resets != seenResets) {
+                    seenResets = resets;
+                    samples = sumTicks = maxTicks = 0;
+                }
+                ++samples;
+                sumTicks += ticks;
+                maxTicks = ticks > maxTicks ? ticks : maxTicks;
+                latencySamples_.store(samples, std::memory_order_relaxed);
+                latencySumTicks_.store(sumTicks, std::memory_order_relaxed);
+                latencyLastTicks_.store(ticks, std::memory_order_relaxed);
+                latencyMaxTicks_.store(maxTicks, std::memory_order_relaxed);
+            }
         }
     }
 

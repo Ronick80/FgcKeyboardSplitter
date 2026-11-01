@@ -16,6 +16,10 @@ add_library(FgcCore SHARED
     src/backends/interception_keyboard.cpp
     src/backends/scpvbus_pad.h
     src/backends/scpvbus_pad.cpp
+    src/backends/controller_counter.h
+    src/backends/controller_counter.cpp
+    src/engine/controller_limit.h
+    src/engine/controller_limit.cpp
     src/engine/mapping_session.h
     src/engine/mapping_session.cpp
     src/engine/mapping_table.h
@@ -31,4 +35,4 @@ target_include_directories(FgcCore
 
 target_compile_definitions(FgcCore PRIVATE FGC_CORE_BUILD NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
 target_compile_options(FgcCore PRIVATE /W4 /permissive- /utf-8)
-target_link_libraries(FgcCore PRIVATE nlohmann_json::nlohmann_json setupapi version advapi32 avrt shell32 ole32)
+target_link_libraries(FgcCore PRIVATE nlohmann_json::nlohmann_json setupapi version advapi32 avrt shell32 ole32 xinput)

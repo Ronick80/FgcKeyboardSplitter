@@ -21,8 +21,6 @@ constexpr DWORD kIoctlPlugIn = CTL_CODE(FILE_DEVICE_BUS_EXTENDER, 0x801, METHOD_
 constexpr DWORD kIoctlUnplug = CTL_CODE(FILE_DEVICE_BUS_EXTENDER, 0x802, METHOD_BUFFERED, FILE_WRITE_DATA);
 constexpr DWORD kIoctlReport =
     CTL_CODE(FILE_DEVICE_BUS_EXTENDER, 0x804, METHOD_BUFFERED, FILE_WRITE_DATA | FILE_READ_DATA);
-constexpr DWORD kIoctlIsPlugged =
-    CTL_CODE(FILE_DEVICE_BUS_EXTENDER, 0x901, METHOD_BUFFERED, FILE_WRITE_DATA | FILE_READ_DATA);
 
 constexpr size_t kReportSize = 28;
 constexpr size_t kReportGamepadOffset = 10;
@@ -50,14 +48,6 @@ std::wstring findBusPath() {
     }
     SetupDiDestroyDeviceInfoList(devices);
     return path;
-}
-
-bool isSlotPlugged(HANDLE bus, uint32_t slot) {
-    ULONG input = slot;
-    ULONG output = 0;
-    DWORD bytes = 0;
-    return DeviceIoControl(bus, kIoctlIsPlugged, &input, sizeof(input), &output, sizeof(output), &bytes, nullptr) &&
-           output != 0;
 }
 
 bool plugInSlot(HANDLE bus, uint32_t slot) {
@@ -138,8 +128,10 @@ FgcResult ScpVBusPadBus::plugIn(std::unique_ptr<IVirtualPad>& out) {
         return GetLastError() == ERROR_ACCESS_DENIED ? FGC_ERR_ACCESS_DENIED : FGC_ERR_IO;
     }
 
+    // The driver rejects a slot that is taken, so just try them in order. Its per-slot status query is
+    // not used: it keeps reporting a slot as plugged for a while after an unplug.
     for (uint32_t slot = 1; slot <= kMaxPads; ++slot) {
-        if (!isSlotPlugged(bus, slot) && plugInSlot(bus, slot)) {
+        if (plugInSlot(bus, slot)) {
             out = std::make_unique<ScpVBusPad>(bus, slot);
             return FGC_OK;
         }

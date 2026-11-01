@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "backends/controller_counter.h"
 #include "backends/keyboard_backend.h"
 #include "backends/pad_backend.h"
 #include "engine/mapping_session.h"
@@ -15,6 +16,7 @@
 struct FgcContext {
     std::unique_ptr<fgc::IKeyboardInput> keyboard;
     std::unique_ptr<fgc::IVirtualPadBus> padBus;
+    std::unique_ptr<fgc::IControllerCounter> counter;
     fgc::ProfileStore profiles{fgc::ProfileStore::defaultRoot()};
 
     // Guards the control-plane state below. Mapping threads never take it.

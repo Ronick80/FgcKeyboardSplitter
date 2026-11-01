@@ -62,7 +62,7 @@ const char* describe(FgcResult result) {
         case FGC_ERR_NOT_RUNNING:
             return "Not running";
         case FGC_ERR_CONTROLLER_LIMIT:
-            return "Would exceed the 4 controller limit";
+            return "No free controller slot (Windows allows 4; ScpVBus slots can also be stuck until it restarts)";
         case FGC_ERR_NOT_FOUND:
             return "Not found";
         case FGC_ERR_IO:
@@ -308,6 +308,10 @@ void AppUi::draw() {
     status_ = {};
     status_.struct_size = sizeof(status_);
     fgc_get_status(context_, &status_);
+    updateRunning();
+    if (ImGui::GetTime() - limitCheckedAt_ >= 1.0) {
+        refreshLimit();
+    }
     pollIdentify();
 
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -324,9 +328,35 @@ void AppUi::draw() {
         ImGui::Spacing();
         drawControls();
         ImGui::Spacing();
+        drawLatency();
+        ImGui::Spacing();
         drawMapping();
     }
     ImGui::End();
+}
+
+void AppUi::updateRunning() {
+    runningFlags_.assign(keyboards_.size(), 0);
+    for (size_t i = 0; i < keyboards_.size(); ++i) {
+        int32_t running = 0;
+        if (fgc_is_running(context_, keyboards_[i].hardware_id, &running) == FGC_OK) {
+            runningFlags_[i] = running != 0;
+        }
+    }
+}
+
+bool AppUi::selectedRunning() const {
+    return selectedKeyboard_ >= 0 && selectedKeyboard_ < static_cast<int>(runningFlags_.size()) &&
+           runningFlags_[selectedKeyboard_] != 0;
+}
+
+void AppUi::refreshLimit() {
+    limitCheckedAt_ = ImGui::GetTime();
+    limit_ = {};
+    limit_.struct_size = sizeof(limit_);
+    if (fgc_check_controller_limit(context_, 1, &limit_) != FGC_OK) {
+        limit_.allowed = 1;  // an unreadable count should not block the user; Start still enforces the limit
+    }
 }
 
 void AppUi::drawStatusBar() {
@@ -383,9 +413,6 @@ void AppUi::drawDrivers() {
 void AppUi::drawKeyboards() {
     ImGui::SeparatorText("Keyboard");
 
-    const bool running = status_.running_sessions > 0;
-    ImGui::BeginDisabled(running);
-
     if (ImGui::Button("Refresh list")) {
         refreshKeyboards();
     }
@@ -408,42 +435,118 @@ void AppUi::drawKeyboards() {
         ImGui::TextColored(kGrey, "No keyboards found.");
     } else {
         for (int i = 0; i < static_cast<int>(keyboards_.size()); ++i) {
-            if (ImGui::Selectable(keyboards_[i].display_name, selectedKeyboard_ == i)) {
+            const bool running = i < static_cast<int>(runningFlags_.size()) && runningFlags_[i] != 0;
+            const std::string label =
+                (running ? "[RUNNING] " : "") + std::string(keyboards_[i].display_name) + "##" + std::to_string(i);
+            if (running) {
+                ImGui::PushStyleColor(ImGuiCol_Text, kGreen);
+            }
+            if (ImGui::Selectable(label.c_str(), selectedKeyboard_ == i)) {
                 selectKeyboard(i);
+            }
+            if (running) {
+                ImGui::PopStyleColor();
             }
         }
     }
-
-    ImGui::EndDisabled();
 }
 
 void AppUi::drawControls() {
     ImGui::SeparatorText("Control");
 
-    const bool running = status_.running_sessions > 0;
-    const bool canStart = !running && selectedKeyboard_ >= 0 && driversReady();
+    const bool selectedIsRunning = selectedRunning();
+    const bool canStart = !selectedIsRunning && selectedKeyboard_ >= 0 && driversReady() && limit_.allowed != 0;
 
     ImGui::BeginDisabled(!canStart);
     if (ImGui::Button("Start", ImVec2(120, 0))) {
-        const FgcResult result = fgc_start(context_, keyboards_[selectedKeyboard_].hardware_id);
+        const FgcResult result = fgc_start(context_, selectedHardwareId());
         actionMessage_ = std::string("Start: ") + describe(result);
+        limitCheckedAt_ = -10.0;
     }
     ImGui::EndDisabled();
 
     ImGui::SameLine();
-    ImGui::BeginDisabled(!running);
+    ImGui::BeginDisabled(!selectedIsRunning);
     if (ImGui::Button("Stop", ImVec2(120, 0))) {
-        const FgcResult result = fgc_stop_all(context_);
+        const FgcResult result = fgc_stop(context_, selectedHardwareId());
         actionMessage_ = std::string("Stop: ") + describe(result);
+        limitCheckedAt_ = -10.0;
     }
     ImGui::EndDisabled();
 
+    ImGui::SameLine();
+    ImGui::BeginDisabled(status_.running_sessions == 0);
+    if (ImGui::Button("Stop all", ImVec2(120, 0))) {
+        const FgcResult result = fgc_stop_all(context_);
+        actionMessage_ = std::string("Stop all: ") + describe(result);
+        limitCheckedAt_ = -10.0;
+    }
+    ImGui::EndDisabled();
+
+    ImGui::Text("Controller slots: %u other + %u from this app = %u of %u", limit_.physical_connected,
+                limit_.virtual_active, limit_.physical_connected + limit_.virtual_active,
+                FGC_MAX_XINPUT_CONTROLLERS);
+    if (!limit_.allowed && !selectedIsRunning) {
+        ImGui::TextColored(kRed, "No free slot: Windows supports at most 4 controllers in total.");
+    }
+
     ImGui::TextWrapped(
-        "While running, every key on the selected keyboard is hidden from other programs. If it is your only "
+        "While running, every key on a started keyboard is hidden from other programs. If it is your only "
         "keyboard, click Stop with the mouse.");
 
     if (!actionMessage_.empty()) {
         ImGui::TextUnformatted(actionMessage_.c_str());
+    }
+}
+
+void AppUi::drawLatency() {
+    if (status_.running_sessions == 0) {
+        return;
+    }
+
+    ImGui::SeparatorText("Latency");
+    ImGui::TextWrapped(
+        "Microseconds from the mapping thread waking on a key event to the virtual controller accepting the "
+        "report. It does not include keyboard or USB delay, or how often the game reads the controller.");
+
+    if (ImGui::BeginTable("latency", 5, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("Keyboard");
+        ImGui::TableSetupColumn("Samples");
+        ImGui::TableSetupColumn("Last");
+        ImGui::TableSetupColumn("Average");
+        ImGui::TableSetupColumn("Max");
+        ImGui::TableHeadersRow();
+
+        for (size_t i = 0; i < keyboards_.size(); ++i) {
+            FgcLatencyStats stats{};
+            stats.struct_size = sizeof(stats);
+            if (i >= runningFlags_.size() || runningFlags_[i] == 0 ||
+                fgc_get_latency_stats(context_, keyboards_[i].hardware_id, &stats) != FGC_OK) {
+                continue;
+            }
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(keyboards_[i].display_name);
+            ImGui::TableNextColumn();
+            ImGui::Text("%llu", static_cast<unsigned long long>(stats.sample_count));
+            for (const uint64_t ns : {stats.last_ns, stats.average_ns, stats.max_ns}) {
+                ImGui::TableNextColumn();
+                if (stats.sample_count == 0) {
+                    ImGui::TextUnformatted("-");
+                } else {
+                    ImGui::Text("%.1f", static_cast<double>(ns) / 1000.0);
+                }
+            }
+        }
+        ImGui::EndTable();
+    }
+
+    if (ImGui::Button("Reset statistics")) {
+        for (size_t i = 0; i < keyboards_.size(); ++i) {
+            if (i < runningFlags_.size() && runningFlags_[i] != 0) {
+                fgc_reset_latency_stats(context_, keyboards_[i].hardware_id);
+            }
+        }
     }
 }
 

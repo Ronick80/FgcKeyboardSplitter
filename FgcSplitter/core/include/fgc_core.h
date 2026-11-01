@@ -119,8 +119,8 @@ typedef struct FgcKeyboardInfo {
 
 typedef struct FgcControllerLimit {
     uint32_t struct_size;
-    uint32_t physical_connected;
-    uint32_t virtual_active;
+    uint32_t physical_connected; /* XInput controllers not owned by this library's running sessions */
+    uint32_t virtual_active; /* virtual pads held by this library's sessions */
     uint32_t virtual_requested;
     int32_t allowed; /* nonzero when physical + active + requested <= 4 */
 } FgcControllerLimit;
@@ -142,6 +142,10 @@ typedef struct FgcEvent {
     char hardware_id[FGC_HARDWARE_ID_MAX];
 } FgcEvent;
 
+/* Application latency of one mapping session, in nanoseconds: from the mapping thread waking on a key
+ * event to the virtual controller accepting the resulting report. It excludes keyboard and USB delay
+ * before the event and the game's own controller polling after it. Only events that change the
+ * controller state are counted. */
 typedef struct FgcLatencyStats {
     uint32_t struct_size;
     uint64_t sample_count;
@@ -231,25 +235,31 @@ FGC_API FgcResult fgc_profile_get_last_used(FgcContext* context, const char* har
 
 /* Controller limit */
 
-/* [control] Counts physical controllers and active virtual pads, plus the pads about to be added. */
+/* [control] Counts XInput controllers and this library's virtual pads, plus the pads about to be added.
+   A pad started less than 3 seconds ago may not be visible to XInput yet, so it is counted conservatively. */
 FGC_API FgcResult fgc_check_controller_limit(FgcContext* context, uint32_t virtual_requested,
                                              FgcControllerLimit* out_limit);
 
 /* Sessions */
 
-/* [control] Fails with FGC_ERR_CONTROLLER_LIMIT if the 4-controller cap would be exceeded. */
+/* [control] Fails with FGC_ERR_CONTROLLER_LIMIT if the 4-controller cap would be exceeded. Keyboards run
+   independently, each on its own thread and virtual pad. */
 FGC_API FgcResult fgc_start(FgcContext* context, const char* hardware_id);
 /* [control] Resets the virtual pad to neutral and releases the keyboard. */
 FGC_API FgcResult fgc_stop(FgcContext* context, const char* hardware_id);
 /* [control] */
 FGC_API FgcResult fgc_stop_all(FgcContext* context);
+/* [control] Sets *out_running to nonzero while the keyboard's mapping thread is alive. */
+FGC_API FgcResult fgc_is_running(FgcContext* context, const char* hardware_id, int32_t* out_running);
 /* [lock-free] */
 FGC_API FgcResult fgc_get_status(FgcContext* context, FgcStatus* out_status);
 /* [lock-free] Pops one event; out_event->type is FGC_EVENT_NONE when the queue is empty. */
 FGC_API FgcResult fgc_poll_event(FgcContext* context, FgcEvent* out_event);
-/* [lock-free] */
+/* [control] FGC_ERR_NOT_RUNNING when the keyboard has no session. */
 FGC_API FgcResult fgc_get_latency_stats(FgcContext* context, const char* hardware_id,
                                         FgcLatencyStats* out_stats);
+/* [control] Clears the statistics, including the maximum. */
+FGC_API FgcResult fgc_reset_latency_stats(FgcContext* context, const char* hardware_id);
 
 #ifdef __cplusplus
 }

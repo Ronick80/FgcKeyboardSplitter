@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <string>
 #include <thread>
@@ -10,6 +11,14 @@
 #include "mapping_table.h"
 
 namespace fgc {
+
+// Values are QueryPerformanceCounter ticks.
+struct LatencySnapshot {
+    uint64_t samples = 0;
+    uint64_t lastTicks = 0;
+    uint64_t averageTicks = 0;
+    uint64_t maxTicks = 0;
+};
 
 // One keyboard feeding one virtual pad on its own high-priority thread.
 class MappingSession {
@@ -37,6 +46,14 @@ public:
         return finished_.load(std::memory_order_acquire);
     }
 
+    std::chrono::steady_clock::time_point startedAt() const noexcept {
+        return startedAt_;
+    }
+
+    // Lock-free; safe while the thread runs.
+    LatencySnapshot latency() const noexcept;
+    void resetLatency() noexcept;
+
 private:
     void run() noexcept;
 
@@ -45,6 +62,14 @@ private:
     std::unique_ptr<IVirtualPad> pad_;
     std::atomic<uint32_t>& runningCounter_;
     std::atomic<bool> finished_{false};
+    const std::chrono::steady_clock::time_point startedAt_ = std::chrono::steady_clock::now();
+
+    // Written only by the mapping thread (and zeroed by resetLatency()); read by latency().
+    std::atomic<uint64_t> latencySamples_{0};
+    std::atomic<uint64_t> latencySumTicks_{0};
+    std::atomic<uint64_t> latencyLastTicks_{0};
+    std::atomic<uint64_t> latencyMaxTicks_{0};
+    std::atomic<uint32_t> latencyResets_{0};  // the thread restarts its own totals when this changes
 
     // The thread reads table_ inside an odd/even readerEpoch_ window; setMapping() frees the
     // old table only after that window has closed.
