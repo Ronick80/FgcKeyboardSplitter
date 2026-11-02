@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstring>
 #include <iterator>
 #include <memory>
@@ -557,7 +558,9 @@ FGC_API FgcResult fgc_is_running(FgcContext* context, const char* hardware_id, i
 
 FGC_API FgcResult fgc_get_latency_stats(FgcContext* context, const char* hardware_id,
                                         FgcLatencyStats* out_stats) {
-    if (!context || !hardware_id || !validStruct(out_stats)) {
+    // Callers built before the breakdown fields existed pass the smaller size; they just get the first part.
+    constexpr size_t kBaseSize = offsetof(FgcLatencyStats, read_average_ns);
+    if (!context || !hardware_id || !out_stats || out_stats->struct_size < kBaseSize) {
         return FGC_ERR_INVALID_ARGUMENT;
     }
     return guarded([&] {
@@ -571,6 +574,12 @@ FGC_API FgcResult fgc_get_latency_stats(FgcContext* context, const char* hardwar
         out_stats->last_ns = ticksToNanoseconds(snapshot.lastTicks);
         out_stats->average_ns = ticksToNanoseconds(snapshot.averageTicks);
         out_stats->max_ns = ticksToNanoseconds(snapshot.maxTicks);
+        if (out_stats->struct_size >= sizeof(FgcLatencyStats)) {
+            out_stats->read_average_ns = ticksToNanoseconds(snapshot.readAverageTicks);
+            out_stats->read_max_ns = ticksToNanoseconds(snapshot.readMaxTicks);
+            out_stats->report_average_ns = ticksToNanoseconds(snapshot.reportAverageTicks);
+            out_stats->report_max_ns = ticksToNanoseconds(snapshot.reportMaxTicks);
+        }
         return FGC_OK;
     });
 }

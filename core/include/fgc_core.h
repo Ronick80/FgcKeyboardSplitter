@@ -6,8 +6,9 @@
  *  - All strings are UTF-8, NUL-terminated, and live in caller-provided buffers or
  *    fixed-size struct fields. The library never hands out memory the caller must free.
  *  - Every struct passed in or out begins with `struct_size`. The caller sets it to
- *    sizeof(struct) before the call. The library rejects a struct smaller than it expects,
- *    and a future version may append fields only after the existing ones.
+ *    sizeof(struct) before the call. The library rejects a struct smaller than it expects, except where a
+ *    function says it accepts an older layout and fills only the fields that fit. Future versions append
+ *    fields only after the existing ones.
  *  - Mapping threads never call back into the caller. Status and events are polled.
  *
  * Thread safety (labels used on each function)
@@ -155,6 +156,12 @@ typedef struct FgcLatencyStats {
     uint64_t last_ns;
     uint64_t average_ns;
     uint64_t max_ns;
+    /* Where the time goes: the keyboard driver read after the thread wakes, and the virtual controller call.
+     * Present only when the caller's struct_size covers them. */
+    uint64_t read_average_ns;
+    uint64_t read_max_ns;
+    uint64_t report_average_ns;
+    uint64_t report_max_ns;
 } FgcLatencyStats;
 
 /* Lifetime */

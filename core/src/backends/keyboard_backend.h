@@ -17,10 +17,12 @@ struct KeyboardDevice {
 };
 
 // keyCode uses the FgcMapping encoding (set-1 scan code, 0x100 for E0-prefixed keys).
+// Timestamps are QueryPerformanceCounter ticks: when the wait woke, and when the driver read finished.
 struct KeyEvent {
     uint16_t keyCode = 0;
     bool down = false;
     int64_t timestampQpc = 0;
+    int64_t readDoneQpc = 0;
 };
 
 enum class WaitResult { Event, Interrupted, DeviceLost };

@@ -124,8 +124,9 @@ delete. A keyboard starts from the profile it used last. Files are plain JSON in
 ### Latency
 
 While a keyboard runs, the Latency table shows the time from the mapping thread waking on a key event to the
-virtual controller accepting the report. It does not include keyboard or USB delay, or how often the game reads
-its controller.
+virtual controller accepting the report, in **microseconds** (1,000 us = 1 ms). Read is the keyboard driver read
+and Report is the virtual controller call; the remainder is the app's own work. It does not include keyboard or USB
+delay, or how often the game reads its controller.
 
 ## Command line
 

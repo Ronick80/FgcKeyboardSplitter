@@ -131,9 +131,13 @@ int run(FgcContext* core, const char* selector, int seconds) {
     FgcLatencyStats stats{};
     stats.struct_size = sizeof(stats);
     if (fgc_get_latency_stats(core, chosen->hardware_id, &stats) == FGC_OK && stats.sample_count > 0) {
-        std::printf("Latency over %llu events: average %.1f us, max %.1f us\n",
+        std::printf("Latency over %llu events: average %.1f us (max %.1f us)\n",
                     static_cast<unsigned long long>(stats.sample_count), stats.average_ns / 1000.0,
                     stats.max_ns / 1000.0);
+        std::printf("  keyboard read: average %.1f us (max %.1f us)\n", stats.read_average_ns / 1000.0,
+                    stats.read_max_ns / 1000.0);
+        std::printf("  controller report: average %.1f us (max %.1f us)\n", stats.report_average_ns / 1000.0,
+                    stats.report_max_ns / 1000.0);
     }
 
     fgc_stop(core, chosen->hardware_id);

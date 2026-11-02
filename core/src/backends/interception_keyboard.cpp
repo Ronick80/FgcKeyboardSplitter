@@ -211,6 +211,7 @@ public:
                 out.keyCode = static_cast<uint16_t>((stroke.makeCode & 0xFFu) | extended);
                 out.down = (stroke.flags & kStrokeUp) == 0;
                 out.timestampQpc = wokeQpc_;
+                out.readDoneQpc = readDoneQpc_;
                 return WaitResult::Event;
             }
 
@@ -231,6 +232,7 @@ public:
             }
             count_ = bytes / sizeof(RawKeyStroke);
             next_ = 0;
+            readDoneQpc_ = qpcNow();
         }
     }
 
@@ -271,6 +273,7 @@ private:
     size_t count_ = 0;
     size_t next_ = 0;
     int64_t wokeQpc_ = 0;
+    int64_t readDoneQpc_ = 0;
 };
 
 struct IdentifyTarget {

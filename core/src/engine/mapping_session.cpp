@@ -86,7 +86,11 @@ LatencySnapshot MappingSession::latency() const noexcept {
     snapshot.maxTicks = latencyMaxTicks_.load(std::memory_order_relaxed);
     if (snapshot.samples > 0) {
         snapshot.averageTicks = latencySumTicks_.load(std::memory_order_relaxed) / snapshot.samples;
+        snapshot.readAverageTicks = latencyReadSumTicks_.load(std::memory_order_relaxed) / snapshot.samples;
+        snapshot.reportAverageTicks = latencyReportSumTicks_.load(std::memory_order_relaxed) / snapshot.samples;
     }
+    snapshot.readMaxTicks = latencyReadMaxTicks_.load(std::memory_order_relaxed);
+    snapshot.reportMaxTicks = latencyReportMaxTicks_.load(std::memory_order_relaxed);
     return snapshot;
 }
 
@@ -96,6 +100,10 @@ void MappingSession::resetLatency() noexcept {
     latencySumTicks_.store(0, std::memory_order_relaxed);
     latencyLastTicks_.store(0, std::memory_order_relaxed);
     latencyMaxTicks_.store(0, std::memory_order_relaxed);
+    latencyReadSumTicks_.store(0, std::memory_order_relaxed);
+    latencyReadMaxTicks_.store(0, std::memory_order_relaxed);
+    latencyReportSumTicks_.store(0, std::memory_order_relaxed);
+    latencyReportMaxTicks_.store(0, std::memory_order_relaxed);
 }
 
 void MappingSession::run() noexcept {
@@ -113,6 +121,10 @@ void MappingSession::run() noexcept {
     uint64_t samples = 0;
     uint64_t sumTicks = 0;
     uint64_t maxTicks = 0;
+    uint64_t readSumTicks = 0;
+    uint64_t readMaxTicks = 0;
+    uint64_t reportSumTicks = 0;
+    uint64_t reportMaxTicks = 0;
     uint32_t seenResets = 0;
     WaitResult ended = WaitResult::Interrupted;
 
@@ -145,26 +157,39 @@ void MappingSession::run() noexcept {
         if (state == submitted) {
             continue;
         }
+        LARGE_INTEGER beforeReport;
+        QueryPerformanceCounter(&beforeReport);
         if (pad_->submit(state) == FGC_OK) {
             submitted = state;
 
             LARGE_INTEGER done;
             QueryPerformanceCounter(&done);
             if (event.timestampQpc > 0) {
-                const uint64_t ticks =
-                    done.QuadPart > event.timestampQpc ? static_cast<uint64_t>(done.QuadPart - event.timestampQpc) : 0;
+                const auto span = [](int64_t from, int64_t to) { return to > from ? static_cast<uint64_t>(to - from) : uint64_t{0}; };
+                const uint64_t ticks = span(event.timestampQpc, done.QuadPart);
+                const uint64_t readTicks = span(event.timestampQpc, event.readDoneQpc);
+                const uint64_t reportTicks = span(beforeReport.QuadPart, done.QuadPart);
                 const uint32_t resets = latencyResets_.load(std::memory_order_relaxed);
                 if (resets != seenResets) {
                     seenResets = resets;
                     samples = sumTicks = maxTicks = 0;
+                    readSumTicks = readMaxTicks = reportSumTicks = reportMaxTicks = 0;
                 }
                 ++samples;
                 sumTicks += ticks;
                 maxTicks = ticks > maxTicks ? ticks : maxTicks;
+                readSumTicks += readTicks;
+                readMaxTicks = readTicks > readMaxTicks ? readTicks : readMaxTicks;
+                reportSumTicks += reportTicks;
+                reportMaxTicks = reportTicks > reportMaxTicks ? reportTicks : reportMaxTicks;
                 latencySamples_.store(samples, std::memory_order_relaxed);
                 latencySumTicks_.store(sumTicks, std::memory_order_relaxed);
                 latencyLastTicks_.store(ticks, std::memory_order_relaxed);
                 latencyMaxTicks_.store(maxTicks, std::memory_order_relaxed);
+                latencyReadSumTicks_.store(readSumTicks, std::memory_order_relaxed);
+                latencyReadMaxTicks_.store(readMaxTicks, std::memory_order_relaxed);
+                latencyReportSumTicks_.store(reportSumTicks, std::memory_order_relaxed);
+                latencyReportMaxTicks_.store(reportMaxTicks, std::memory_order_relaxed);
             }
         }
     }

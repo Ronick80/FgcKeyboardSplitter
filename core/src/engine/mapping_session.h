@@ -13,12 +13,17 @@
 
 namespace fgc {
 
-// Values are QueryPerformanceCounter ticks.
+// Values are QueryPerformanceCounter ticks. Total is wake to the controller accepting the report; it splits
+// into the keyboard driver read and the virtual controller call (the rest is the app's own few microseconds).
 struct LatencySnapshot {
     uint64_t samples = 0;
     uint64_t lastTicks = 0;
     uint64_t averageTicks = 0;
     uint64_t maxTicks = 0;
+    uint64_t readAverageTicks = 0;
+    uint64_t readMaxTicks = 0;
+    uint64_t reportAverageTicks = 0;
+    uint64_t reportMaxTicks = 0;
 };
 
 // One keyboard feeding one virtual pad on its own high-priority thread.
@@ -81,6 +86,10 @@ private:
     std::atomic<uint64_t> latencySumTicks_{0};
     std::atomic<uint64_t> latencyLastTicks_{0};
     std::atomic<uint64_t> latencyMaxTicks_{0};
+    std::atomic<uint64_t> latencyReadSumTicks_{0};
+    std::atomic<uint64_t> latencyReadMaxTicks_{0};
+    std::atomic<uint64_t> latencyReportSumTicks_{0};
+    std::atomic<uint64_t> latencyReportMaxTicks_{0};
     std::atomic<uint32_t> latencyResets_{0};  // the thread restarts its own totals when this changes
 
     // The thread reads table_ inside an odd/even readerEpoch_ window; setMapping() frees the
