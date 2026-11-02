@@ -43,12 +43,22 @@ jobs:
       - name: Package
         run: cmake --build build --config Release --target package
 
+      - name: Write the checksum file
+        shell: pwsh
+        run: |
+          $zip = "build/FgcKeyboardSplitter-${{ steps.version.outputs.version }}-win-x64.zip"
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          [IO.File]::WriteAllText("$zip.sha256", "$hash  $(Split-Path $zip -Leaf)`n")
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
           name: ${{ steps.version.outputs.name }} ${{ steps.version.outputs.version }}
           body: |
-            Windows x64. Needs the Interception and ScpVBus drivers; see the README for installation.
+            Windows x64. Needs the Interception and ScpVBus drivers: run FgcDriverSetup.exe as administrator to
+            install them (see the README). The .sha256 file is the checksum of the zip.
           generate_release_notes: true
-          files: build/FgcKeyboardSplitter-${{ steps.version.outputs.version }}-win-x64.zip
+          files: |
+            build/FgcKeyboardSplitter-${{ steps.version.outputs.version }}-win-x64.zip
+            build/FgcKeyboardSplitter-${{ steps.version.outputs.version }}-win-x64.zip.sha256

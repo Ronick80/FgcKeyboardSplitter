@@ -160,6 +160,24 @@ FgcCli run <index|hardware-id> 30 # run one keyboard for 30 seconds (omit the nu
 
 `samples\csharp\FgcSample.cs` shows the same API called from C# with plain P/Invoke.
 
+## Writing another front end
+
+The engine has no UI dependency, so any program can be a front end. The contract is the C API in
+`core/include/fgc_core.h` plus the files in the release zip:
+
+- **`FgcCore.dll`** is x64 with a static runtime and no other dependencies. Load it from the program's own folder.
+  Check `fgc_get_api_version()` against the version you were built for and show `fgc_get_version()` as the engine
+  version. API version 1 is stable: later releases only add functions and append struct fields, and every struct
+  starts with `struct_size`.
+- **`FgcDriverSetup.exe` and `drivers\`** install the two drivers. A front end can start the tool elevated and
+  then re-read `fgc_get_driver_status()`; the tool's exit codes are listed in
+  [Installing the drivers](#installing-the-drivers).
+- **`FgcKeyboardSplitter-<version>-win-x64.zip.sha256`**, attached to each release, is the SHA-256 of the zip, so a
+  build script can download a pinned version and verify it.
+- Profiles are plain JSON files that every front end shares (see [Profiles](#profiles)).
+- On exit call `fgc_destroy` (or at least `fgc_stop_all`), also from crash handlers: a controller left plugged at
+  ScpVBus keeps holding its slot.
+
 ## When something goes wrong
 
 - **A keyboard unplugs or the driver stops answering:** its controller is neutralized and released, the keyboard
@@ -183,6 +201,8 @@ it and uses it for the version shown in the app and `FgcCli version`, the versio
 
 To make a package locally: `cmake --build build --config Release --target package` produces
 `build\FgcKeyboardSplitter-<version>-win-x64.zip`.
+
+The release workflow also attaches `FgcKeyboardSplitter-<version>-win-x64.zip.sha256`, the SHA-256 of the zip.
 
 To publish a release:
 
