@@ -1,8 +1,33 @@
 # FGC Keyboard Splitter
 
+> **Credit:** this project builds on [KeyboardSplitterXbox](https://github.com/djlastnight/KeyboardSplitterXbox)
+> by djlastnight. That application showed how to combine the Interception keyboard driver with the ScpVBus virtual
+> Xbox controller driver, and its architecture is the basis for this one. Thank you to its developer for that work.
+> FGC Keyboard Splitter is a separate C++ implementation written from scratch; the bundled ScpVBus driver files
+> come from that project.
+
 Turns one or more physical keyboards into virtual Xbox 360 controllers on Windows, built for fighting games:
 each keyboard is read on its own high-priority thread, its keys are hidden from every other program while it
 runs, and each key change goes straight to a virtual controller.
+
+## Why this exists
+
+Fighting games punish any delay or stuck input, and keyboard-to-controller mappers can add noticeable delay or
+leave inputs stuck. This project was created to try to bring input latency down significantly so a keyboard is
+a practical way to play them. The design choices all serve that goal:
+
+- Every keyboard is handled on its own high-priority thread, separate from the interface.
+- The input path blocks until a key arrives instead of polling, and does no memory allocation, locking or file
+  access while handling a key.
+- The Interception driver is driven directly, with one handle per keyboard, so keyboards never wait on each other.
+- Each key change becomes one report to the virtual controller, sent immediately.
+- Key state is tracked exactly, so remapping while a key is held, opposing directions and unplugging a keyboard do
+  not leave inputs stuck.
+- Mappings can be edited while a keyboard is running without interrupting input.
+
+The Latency table in the app shows how long the app itself takes from a key event to the virtual controller
+accepting it. Delays outside the app, such as the keyboard's own scan rate and how often a game reads its
+controller, are not something it can change.
 
 ## Requirements
 
@@ -51,13 +76,22 @@ To remove it: `install-interception.exe /uninstall`, then restart.
 
 **ScpVBus**
 
-1. From the `drivers\ScpVBus` folder (next to `FgcApp.exe`, or `drivers\ScpVBus` in the source tree) run:
-   `devcon.exe install ScpVBus.inf Root\ScpVBus`
+From the `drivers\ScpVBus` folder (next to `FgcApp.exe`, or `drivers\ScpVBus` in the source tree):
+
+1. **Windows 11 (and any PC where step 2 fails):** first add the driver to Windows' driver store:
+   `pnputil /add-driver ScpVBus.inf /install`
+   On its own this does not create the device, so the app still reports ScpVBus as not installed. Continue with step 2.
+2. Create the device and attach the driver: `devcon.exe install ScpVBus.inf Root\ScpVBus`
+3. Check it: `devcon.exe status Root\ScpVBus` should say "Driver is running". Then click "Re-check drivers" in the app.
+
+On Windows 11, running `devcon.exe install` without step 1 can end with only "devcon.exe failed". If a failed attempt
+left a stray device behind, remove it first with `devcon.exe remove Root\ScpVBus` (or in Device Manager with View >
+Show hidden devices), then repeat steps 1 and 2.
 
 To remove it: `devcon.exe remove Root\ScpVBus`.
 
 Both drivers are old. If Windows blocks one (Secure Boot, memory integrity, driver signing), the app will keep
-showing it as not installed.
+showing it as not installed; `devcon.exe status` shows the problem code.
 
 ## Using the app
 

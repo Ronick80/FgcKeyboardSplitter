@@ -1,2 +1,2 @@
 FGC Keyboard Splitter
-1.0.0
+1.0.1

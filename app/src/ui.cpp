@@ -435,7 +435,8 @@ void AppUi::drawDrivers() {
             ImGui::TextColored(kRed, "Not installed");
             ImGui::TextWrapped(
                 "From an administrator prompt, go to the drivers\\ScpVBus folder next to this program and run "
-                "\"devcon.exe install ScpVBus.inf Root\\ScpVBus\".");
+                "\"pnputil /add-driver ScpVBus.inf /install\", then "
+                "\"devcon.exe install ScpVBus.inf Root\\ScpVBus\". Both steps are needed on Windows 11.");
         }
     }
 
