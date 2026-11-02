@@ -538,15 +538,21 @@ void AppUi::drawLatency() {
 
     ImGui::SeparatorText("Latency");
     ImGui::TextWrapped(
-        "Microseconds from the mapping thread waking on a key event to the virtual controller accepting the "
-        "report. It does not include keyboard or USB delay, or how often the game reads the controller.");
+        "All values are in microseconds (1,000 us = 1 ms): from the mapping thread waking on a key event to the "
+        "virtual controller accepting the report. Read is the keyboard driver read after waking; Report is the "
+        "virtual controller call. The rest is the app's own work. It does not include keyboard or USB delay, or "
+        "how often the game reads the controller.");
 
-    if (ImGui::BeginTable("latency", 5, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg)) {
+    if (ImGui::BeginTable("latency", 9, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg)) {
         ImGui::TableSetupColumn("Keyboard");
         ImGui::TableSetupColumn("Samples");
-        ImGui::TableSetupColumn("Last");
-        ImGui::TableSetupColumn("Average");
-        ImGui::TableSetupColumn("Max");
+        ImGui::TableSetupColumn("Last (us)");
+        ImGui::TableSetupColumn("Average (us)");
+        ImGui::TableSetupColumn("Max (us)");
+        ImGui::TableSetupColumn("Read avg (us)");
+        ImGui::TableSetupColumn("Read max (us)");
+        ImGui::TableSetupColumn("Report avg (us)");
+        ImGui::TableSetupColumn("Report max (us)");
         ImGui::TableHeadersRow();
 
         for (size_t i = 0; i < keyboards_.size(); ++i) {
@@ -561,7 +567,8 @@ void AppUi::drawLatency() {
             ImGui::TextUnformatted(keyboards_[i].display_name);
             ImGui::TableNextColumn();
             ImGui::Text("%llu", static_cast<unsigned long long>(stats.sample_count));
-            for (const uint64_t ns : {stats.last_ns, stats.average_ns, stats.max_ns}) {
+            for (const uint64_t ns : {stats.last_ns, stats.average_ns, stats.max_ns, stats.read_average_ns,
+                                      stats.read_max_ns, stats.report_average_ns, stats.report_max_ns}) {
                 ImGui::TableNextColumn();
                 if (stats.sample_count == 0) {
                     ImGui::TextUnformatted("-");
