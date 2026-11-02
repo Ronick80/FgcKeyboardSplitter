@@ -53,7 +53,8 @@ Output is in `build\bin\<Config>\`:
 | `FgcApp.exe` | The Dear ImGui application |
 | `FgcCore.dll` | The engine; both front ends use it through `core/include/fgc_core.h` |
 | `FgcCli.exe` | A small command-line front end |
-| `drivers\ScpVBus\` | The ScpVBus driver files, copied next to the app |
+| `FgcDriverSetup.exe` | Installs and removes the two drivers (see [Installing the drivers](#installing-the-drivers)) |
+| `drivers\ScpVBus\` | The ScpVBus driver files, copied next to the app and the setup tool |
 
 The C++ runtime is linked statically, so the binaries run on a PC without the Visual C++ Redistributable.
 Dependencies (Dear ImGui, nlohmann/json) are downloaded by CMake on the first configure.
@@ -64,7 +65,29 @@ to your `PATH`.
 
 ## Installing the drivers
 
-Both installs need an administrator prompt. The app shows the status of each driver and these same steps.
+The easy way is `FgcDriverSetup.exe`, which sits next to `FgcApp.exe`. Keep `FgcCore.dll` and the `drivers` folder
+next to it. Double-click it (it asks for administrator rights) and choose **1) Install missing drivers**, or use
+the command line:
+
+```powershell
+FgcDriverSetup status                 # which drivers are installed
+FgcDriverSetup install                # install whatever is missing
+FgcDriverSetup install scpvbus        # or interception
+FgcDriverSetup uninstall scpvbus      # or interception
+FgcDriverSetup install --dry-run      # show what would happen, change nothing
+```
+
+`--yes` skips the questions. Interception needs a restart of Windows; the tool offers one (default No). Exit codes:
+0 done, 1 failed, 2 wrong arguments, 3 done but a restart is pending. Everything it does is written to
+`FgcDriverSetup.log` next to it, including your Windows version, Secure Boot and memory integrity state; send that
+file if something fails.
+
+Interception is downloaded from the official `oblitum/Interception` v1.0.1 release on GitHub and checked against a
+built-in SHA-256 checksum before anything from it runs. On a PC without internet access, download `Interception.zip`
+from that release yourself and put it next to `FgcDriverSetup.exe`; it is checked the same way.
+
+The manual steps below do the same thing and are the fallback if the tool does not work for you. Both need an
+administrator prompt.
 
 **Interception**
 
@@ -182,6 +205,7 @@ cmake/            Templates for the generated version header and resources
 core/      FgcCore.dll: keyboard and virtual-pad backends, mapping threads, profiles, public C API
 app/       FgcApp.exe: Dear ImGui front end, uses only core/include/fgc_core.h
 cli/       FgcCli.exe: command-line front end
+driver_setup/  FgcDriverSetup.exe: installs and removes the Interception and ScpVBus drivers
 samples/   Calling the C API from C#
 drivers/   ScpVBus driver files
 ```

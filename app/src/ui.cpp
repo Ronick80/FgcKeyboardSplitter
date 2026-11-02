@@ -423,7 +423,8 @@ void AppUi::drawDrivers() {
             default:
                 ImGui::TextColored(kRed, "Not installed");
                 ImGui::TextWrapped(
-                    "Run \"install-interception.exe /install\" from an administrator prompt, then restart Windows.");
+                    "Close this program, run FgcDriverSetup.exe (next to this program) as administrator, then restart "
+                    "Windows.");
                 break;
         }
 
@@ -434,9 +435,7 @@ void AppUi::drawDrivers() {
         } else {
             ImGui::TextColored(kRed, "Not installed");
             ImGui::TextWrapped(
-                "From an administrator prompt, go to the drivers\\ScpVBus folder next to this program and run "
-                "\"pnputil /add-driver ScpVBus.inf /install\", then "
-                "\"devcon.exe install ScpVBus.inf Root\\ScpVBus\". Both steps are needed on Windows 11.");
+                "Run FgcDriverSetup.exe (next to this program) as administrator, then click Re-check drivers.");
         }
     }
 

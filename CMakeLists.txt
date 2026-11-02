@@ -53,9 +53,10 @@ endfunction()
 add_subdirectory(core)
 add_subdirectory(app)
 add_subdirectory(cli)
+add_subdirectory(driver_setup)
 
 # `cmake --build build --config Release --target package` makes FgcKeyboardSplitter-<version>-win-x64.zip.
-install(TARGETS FgcApp FgcCli RUNTIME DESTINATION .)
+install(TARGETS FgcApp FgcCli FgcDriverSetup RUNTIME DESTINATION .)
 install(FILES $<TARGET_FILE:FgcCore> README.md DESTINATION .)
 install(DIRECTORY drivers DESTINATION .)
 
