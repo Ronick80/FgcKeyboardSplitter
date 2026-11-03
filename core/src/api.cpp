@@ -584,6 +584,22 @@ FGC_API FgcResult fgc_is_running(FgcContext* context, const char* hardware_id, i
     });
 }
 
+FGC_API FgcResult fgc_get_held_inputs(FgcContext* context, const char* hardware_id, uint32_t* out_inputs) {
+    if (!context || !hardware_id || !out_inputs) {
+        return FGC_ERR_INVALID_ARGUMENT;
+    }
+    return guarded([&] {
+        std::lock_guard<std::mutex> lock(context->controlLock);
+        const auto session = context->sessions.find(hardware_id);
+        if (session == context->sessions.end() || session->second->finished()) {
+            *out_inputs = 0;
+            return FGC_ERR_NOT_RUNNING;
+        }
+        *out_inputs = session->second->heldInputs();
+        return FGC_OK;
+    });
+}
+
 FGC_API FgcResult fgc_get_latency_stats(FgcContext* context, const char* hardware_id,
                                         FgcLatencyStats* out_stats) {
     // Callers built before the breakdown fields existed pass the smaller size; they just get the first part.

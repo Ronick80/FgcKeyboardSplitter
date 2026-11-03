@@ -73,6 +73,11 @@ public:
         return padVisible_;
     }
 
+    // The inputs whose keys are held right now, one bit per FgcXboxInput. Lock-free; safe while the thread runs.
+    uint32_t heldInputs() const noexcept {
+        return heldInputs_.value.load(std::memory_order_relaxed);
+    }
+
     // Lock-free; safe while the thread runs.
     LatencySnapshot latency() const noexcept;
     void resetLatency() noexcept;
@@ -100,6 +105,16 @@ private:
     std::atomic<uint64_t> latencyReportSumTicks_{0};
     std::atomic<uint64_t> latencyReportMaxTicks_{0};
     std::atomic<uint32_t> latencyResets_{0};  // the thread restarts its own totals when this changes
+
+    // Written by the mapping thread after each report, read by a UI that shows held inputs. It has a cache line
+    // to itself, so those reads never touch the line the thread's other per-event state lives on.
+#pragma warning(push)
+#pragma warning(disable : 4324)  // padded to the cache line on purpose
+    struct alignas(64) HeldInputs {
+        std::atomic<uint32_t> value{0};
+    };
+    HeldInputs heldInputs_;
+#pragma warning(pop)
 
     // The thread reads table_ inside an odd/even readerEpoch_ window; setMapping() frees the
     // old table only after that window has closed.

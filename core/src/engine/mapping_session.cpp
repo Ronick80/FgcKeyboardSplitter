@@ -155,6 +155,7 @@ void MappingSession::run() noexcept {
         // A held-key change can leave the pad unchanged (a left+right tie, say); skip the driver call then.
         const PadState state = computePadState(held);
         if (state == submitted) {
+            heldInputs_.value.store(held, std::memory_order_relaxed);
             continue;
         }
         LARGE_INTEGER beforeReport;
@@ -192,8 +193,12 @@ void MappingSession::run() noexcept {
                 latencyReportMaxTicks_.store(reportMaxTicks, std::memory_order_relaxed);
             }
         }
+
+        // Published only after the report went out, so showing held inputs never delays the controller.
+        heldInputs_.value.store(held, std::memory_order_relaxed);
     }
 
+    heldInputs_.value.store(0, std::memory_order_relaxed);
     pad_->reset();
 
     // Keys still held would never get their release to Windows, since the driver swallowed it.
