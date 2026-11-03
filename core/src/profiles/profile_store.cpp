@@ -54,6 +54,41 @@ constexpr const char* kBindingNames[FGC_INPUT_COUNT] = {
     "right_stick_right",
 };
 
+// Read-only profiles every keyboard has. They are listed before the keyboard's own profiles and hide a
+// profile file with the same name.
+struct BuiltinProfile {
+    const char* name;
+    KeyArray (*keys)();
+};
+
+// 2XKO's default keyboard layout, on the buttons 2XKO's default controller layout uses for the same actions.
+// Throw, Break and Ultimate have no button there, so they go to spare buttons the player assigns in game.
+KeyArray twoXkoDefaultKeys() {
+    KeyArray keys{};
+    keys[FGC_INPUT_DPAD_UP] = 0x11;     // W: jump
+    keys[FGC_INPUT_DPAD_DOWN] = 0x1F;   // S: crouch
+    keys[FGC_INPUT_DPAD_LEFT] = 0x1E;   // A: left
+    keys[FGC_INPUT_DPAD_RIGHT] = 0x20;  // D: right
+    keys[FGC_INPUT_RIGHT_BUMPER] = 0x39;      // Space: dash
+    keys[FGC_INPUT_X] = 0x24;                 // J: light
+    keys[FGC_INPUT_Y] = 0x25;                 // K: medium
+    keys[FGC_INPUT_B] = 0x26;                 // L: heavy
+    keys[FGC_INPUT_LEFT_TRIGGER] = 0x32;      // M: special 1
+    keys[FGC_INPUT_RIGHT_TRIGGER] = 0x33;     // , (comma): special 2
+    keys[FGC_INPUT_A] = 0x34;                 // . (period): team
+    keys[FGC_INPUT_LEFT_BUMPER] = 0x16;       // U: parry
+    keys[FGC_INPUT_RIGHT_STICK_CLICK] = 0x13; // R: taunt
+    keys[FGC_INPUT_LEFT_STICK_CLICK] = 0x17;  // I: throw (spare)
+    keys[FGC_INPUT_RIGHT_STICK_DOWN] = 0x18;  // O: break (spare)
+    keys[FGC_INPUT_RIGHT_STICK_UP] = 0x19;    // P: ultimate (spare)
+    // Back stays free: 2XKO uses it for training mode functions such as reset.
+    return keys;
+}
+
+constexpr BuiltinProfile kBuiltinProfiles[] = {
+    {"2XKO Default", twoXkoDefaultKeys},
+};
+
 bool toWide(const std::string& utf8, std::wstring& wide) {
     wide.clear();
     if (utf8.empty()) {
@@ -89,6 +124,15 @@ bool sameName(const std::string& a, const std::string& b) {
     std::wstring wideA;
     std::wstring wideB;
     return toWide(a, wideA) && toWide(b, wideB) && upper(wideA) == upper(wideB);
+}
+
+const BuiltinProfile* findBuiltin(const std::string& name) {
+    for (const BuiltinProfile& builtin : kBuiltinProfiles) {
+        if (sameName(builtin.name, name)) {
+            return &builtin;
+        }
+    }
+    return nullptr;
 }
 
 bool isReservedDeviceName(const std::wstring& name) {
@@ -191,29 +235,43 @@ FgcResult ProfileStore::list(const std::string& hardwareId, std::vector<std::str
         return FGC_ERR_INVALID_ARGUMENT;
     }
 
+    for (const BuiltinProfile& builtin : kBuiltinProfiles) {
+        names.emplace_back(builtin.name);
+    }
+
+    std::vector<std::string> stored;
     std::error_code error;
     fs::directory_iterator entry(root_ / L"profiles" / directoryName, error);
     if (error) {
-        return FGC_OK;  // no folder yet means no profiles
+        return FGC_OK;  // no folder yet means no profiles of its own
     }
     for (const fs::directory_iterator end; entry != end; entry.increment(error)) {
         if (error) {
+            names.clear();
             return FGC_ERR_IO;
         }
         const fs::path& path = entry->path();
         if (entry->is_regular_file(error) && upper(path.extension().wstring()) == L".JSON") {
-            names.push_back(toUtf8(path.stem().wstring()));
+            std::string name = toUtf8(path.stem().wstring());
+            if (!findBuiltin(name)) {
+                stored.push_back(std::move(name));
+            }
         }
     }
 
-    std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) {
+    std::sort(stored.begin(), stored.end(), [](const std::string& a, const std::string& b) {
         std::wstring wideA;
         std::wstring wideB;
         toWide(a, wideA);
         toWide(b, wideB);
         return upper(wideA) < upper(wideB);
     });
+    names.insert(names.end(), std::make_move_iterator(stored.begin()), std::make_move_iterator(stored.end()));
     return FGC_OK;
+}
+
+bool ProfileStore::isBuiltin(const std::string& name) {
+    return findBuiltin(name) != nullptr;
 }
 
 FgcResult ProfileStore::load(const std::string& hardwareId, const std::string& name, KeyArray& keys) const {
@@ -221,6 +279,10 @@ FgcResult ProfileStore::load(const std::string& hardwareId, const std::string& n
     std::wstring directoryName;
     if (!validateName(name, wideName) || !keyboardDirectoryName(hardwareId, directoryName)) {
         return FGC_ERR_INVALID_ARGUMENT;
+    }
+    if (const BuiltinProfile* builtin = findBuiltin(name)) {
+        keys = builtin->keys();
+        return FGC_OK;
     }
 
     json document;
@@ -258,6 +320,9 @@ FgcResult ProfileStore::save(const std::string& hardwareId, const std::string& n
     if (!validateName(name, wideName) || !keyboardDirectoryName(hardwareId, directoryName)) {
         return FGC_ERR_INVALID_ARGUMENT;
     }
+    if (findBuiltin(name)) {
+        return FGC_ERR_READ_ONLY;
+    }
 
     json bindings = json::object();
     for (size_t input = 0; input < keys.size(); ++input) {
@@ -284,6 +349,12 @@ FgcResult ProfileStore::rename(const std::string& hardwareId, const std::string&
     std::wstring directoryName;
     if (!validateName(from, wideFrom) || !validateName(to, wideTo) || !keyboardDirectoryName(hardwareId, directoryName)) {
         return FGC_ERR_INVALID_ARGUMENT;
+    }
+    if (findBuiltin(from)) {
+        return FGC_ERR_READ_ONLY;
+    }
+    if (findBuiltin(to)) {
+        return FGC_ERR_ALREADY_EXISTS;
     }
 
     const fs::path directory = root_ / L"profiles" / directoryName;
@@ -316,6 +387,9 @@ FgcResult ProfileStore::remove(const std::string& hardwareId, const std::string&
     std::wstring directoryName;
     if (!validateName(name, wideName) || !keyboardDirectoryName(hardwareId, directoryName)) {
         return FGC_ERR_INVALID_ARGUMENT;
+    }
+    if (findBuiltin(name)) {
+        return FGC_ERR_READ_ONLY;
     }
 
     // lastUsed() checks the file exists, so ask before it is deleted.
@@ -352,6 +426,10 @@ bool ProfileStore::lastUsed(const std::string& hardwareId, std::string& name) co
     const std::string candidate = entry->get<std::string>();
     if (!validateName(candidate, wideName) || !keyboardDirectoryName(hardwareId, directoryName)) {
         return false;
+    }
+    if (const BuiltinProfile* builtin = findBuiltin(candidate)) {
+        name = builtin->name;
+        return true;
     }
     std::error_code error;
     if (!fs::is_regular_file(root_ / L"profiles" / directoryName / (wideName + L".json"), error)) {

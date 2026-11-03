@@ -338,6 +338,16 @@ FGC_API FgcResult fgc_set_mapping(FgcContext* context, const char* hardware_id, 
     });
 }
 
+FGC_API FgcResult fgc_profile_is_read_only(const char* name, int32_t* out_read_only) {
+    if (!name || !out_read_only) {
+        return FGC_ERR_INVALID_ARGUMENT;
+    }
+    return guarded([&] {
+        *out_read_only = fgc::ProfileStore::isBuiltin(name) ? 1 : 0;
+        return FGC_OK;
+    });
+}
+
 FGC_API FgcResult fgc_profile_count(FgcContext* context, const char* hardware_id, uint32_t* out_count) {
     if (!context || !hardware_id || !out_count) {
         return FGC_ERR_INVALID_ARGUMENT;

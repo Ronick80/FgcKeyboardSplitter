@@ -78,6 +78,8 @@ const char* describe(FgcResult result) {
             return "The file is damaged or from a newer version";
         case FGC_ERR_ALREADY_EXISTS:
             return "A profile with that name already exists";
+        case FGC_ERR_READ_ONLY:
+            return "Built-in profiles cannot be changed. Use Save as to keep a copy under another name";
     }
     return "Unknown error";
 }
@@ -721,8 +723,11 @@ void AppUi::drawProfiles() {
         ImGui::EndCombo();
     }
 
+    int32_t readOnly = 0;
+    fgc_profile_is_read_only(state.current.c_str(), &readOnly);
+
     ImGui::SameLine();
-    ImGui::BeginDisabled(state.current.empty() || !state.dirty);
+    ImGui::BeginDisabled(state.current.empty() || !state.dirty || readOnly);
     if (ImGui::Button("Save")) {
         saveProfile(state.current);
     }
@@ -736,7 +741,7 @@ void AppUi::drawProfiles() {
         ImGui::OpenPopup("Save profile as");
     }
 
-    ImGui::BeginDisabled(state.current.empty());
+    ImGui::BeginDisabled(state.current.empty() || readOnly);
     ImGui::SameLine();
     if (ImGui::Button("Rename...")) {
         snprintf(nameInput_, sizeof(nameInput_), "%s", state.current.c_str());

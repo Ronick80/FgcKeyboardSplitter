@@ -59,7 +59,8 @@ typedef enum FgcResult {
     FGC_ERR_ACCESS_DENIED = 11,
     FGC_ERR_DEVICE_BUSY = 12, /* another process already holds the keyboard */
     FGC_ERR_BAD_FORMAT = 13, /* a stored file could not be understood */
-    FGC_ERR_ALREADY_EXISTS = 14
+    FGC_ERR_ALREADY_EXISTS = 14,
+    FGC_ERR_READ_ONLY = 15 /* a built-in profile cannot be saved over, renamed or deleted */
 } FgcResult;
 
 typedef enum FgcInterceptionState {
@@ -222,11 +223,19 @@ FGC_API FgcResult fgc_set_mapping(FgcContext* context, const char* hardware_id, 
  * right_stick_click start back guide dpad_up dpad_down dpad_left dpad_right left_stick_up left_stick_down
  * left_stick_left left_stick_right right_stick_up right_stick_down right_stick_left right_stick_right.
  * A missing binding is unbound; unknown names are ignored. A "version" above 1 is rejected.
+ *
+ * Every keyboard also has built-in profiles that are not stored as files: "2XKO Default" (2XKO's default
+ * keyboard layout on the buttons of 2XKO's default controller layout). They can be loaded and are remembered
+ * as last used, but saving over, renaming or deleting one fails with FGC_ERR_READ_ONLY, and renaming a profile
+ * to a built-in name fails with FGC_ERR_ALREADY_EXISTS. A profile file with a built-in name is ignored.
  */
 
+/* [lock-free] Sets *out_read_only to 1 for a built-in profile name (case-insensitive), else 0. */
+FGC_API FgcResult fgc_profile_is_read_only(const char* name, int32_t* out_read_only);
 /* [control] */
 FGC_API FgcResult fgc_profile_count(FgcContext* context, const char* hardware_id, uint32_t* out_count);
-/* [control] Names are sorted case-insensitively. FGC_ERR_NOT_FOUND when index is out of range. */
+/* [control] Built-in profiles come first in a fixed order, then the keyboard's own profiles sorted
+   case-insensitively. FGC_ERR_NOT_FOUND when index is out of range. */
 FGC_API FgcResult fgc_profile_get_name(FgcContext* context, const char* hardware_id, uint32_t index,
                                        char* out_name, uint32_t out_name_size);
 /* [control] Makes the profile the keyboard's current mapping (live if running) and marks it as last used.

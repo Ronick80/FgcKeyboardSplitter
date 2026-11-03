@@ -17,7 +17,11 @@ public:
     // %APPDATA%\FgcKeyboardSplitter
     static std::filesystem::path defaultRoot();
 
+    // Built-in profiles first, in their fixed order, then the keyboard's own sorted case-insensitively.
     FgcResult list(const std::string& hardwareId, std::vector<std::string>& names) const;
+
+    // True for a built-in profile name (case-insensitive). Those cannot be saved over, renamed or deleted.
+    static bool isBuiltin(const std::string& name);
     FgcResult load(const std::string& hardwareId, const std::string& name, KeyArray& keys) const;
     FgcResult save(const std::string& hardwareId, const std::string& name, const KeyArray& keys) const;
     FgcResult rename(const std::string& hardwareId, const std::string& from, const std::string& to) const;
