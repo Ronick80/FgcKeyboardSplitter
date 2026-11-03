@@ -82,7 +82,8 @@ KeyArray twoXkoDefaultKeys() {
     keys[FGC_INPUT_LEFT_STICK_CLICK] = 0x17;  // I: throw (spare)
     keys[FGC_INPUT_RIGHT_STICK_DOWN] = 0x18;  // O: break (spare)
     keys[FGC_INPUT_RIGHT_STICK_UP] = 0x19;    // P: ultimate (spare)
-    // Back stays free: 2XKO uses it for training mode functions such as reset.
+    keys[FGC_INPUT_START] = 0x1C;             // Enter: start (menu)
+    keys[FGC_INPUT_BACK] = 0x0F;              // Tab: back (training mode functions such as reset)
     return keys;
 }
 
