@@ -225,7 +225,7 @@ FGC_API FgcResult fgc_set_mapping(FgcContext* context, const char* hardware_id, 
  * A missing binding is unbound; unknown names are ignored. A "version" above 1 is rejected.
  *
  * Every keyboard also has built-in profiles that are not stored as files: "2XKO Default" (2XKO's default
- * keyboard layout on the buttons of 2XKO's default controller layout). They can be loaded and are remembered
+ * keyboard layout on the buttons of 2XKO's default arcade stick layout). They can be loaded and are remembered
  * as last used, but saving over, renaming or deleting one fails with FGC_ERR_READ_ONLY, and renaming a profile
  * to a built-in name fails with FGC_ERR_ALREADY_EXISTS. A profile file with a built-in name is ignored.
  */

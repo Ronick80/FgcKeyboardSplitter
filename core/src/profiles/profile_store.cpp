@@ -61,7 +61,8 @@ struct BuiltinProfile {
     KeyArray (*keys)();
 };
 
-// 2XKO's default keyboard layout, on the buttons 2XKO's default controller layout uses for the same actions.
+// 2XKO's default keyboard layout, on the buttons 2XKO's default arcade stick layout uses for the same actions.
+// The controller layout was tried first, but a keyboard is much closer to a stick, and menus were awkward with it.
 // Throw, Break and Ultimate have no button there, so they go to spare buttons the player assigns in game.
 KeyArray twoXkoDefaultKeys() {
     KeyArray keys{};
@@ -69,14 +70,14 @@ KeyArray twoXkoDefaultKeys() {
     keys[FGC_INPUT_DPAD_DOWN] = 0x1F;   // S: crouch
     keys[FGC_INPUT_DPAD_LEFT] = 0x1E;   // A: left
     keys[FGC_INPUT_DPAD_RIGHT] = 0x20;  // D: right
-    keys[FGC_INPUT_RIGHT_BUMPER] = 0x39;      // Space: dash
+    keys[FGC_INPUT_LEFT_BUMPER] = 0x39;       // Space: dash
     keys[FGC_INPUT_X] = 0x24;                 // J: light
     keys[FGC_INPUT_Y] = 0x25;                 // K: medium
-    keys[FGC_INPUT_B] = 0x26;                 // L: heavy
-    keys[FGC_INPUT_LEFT_TRIGGER] = 0x32;      // M: special 1
-    keys[FGC_INPUT_RIGHT_TRIGGER] = 0x33;     // , (comma): special 2
-    keys[FGC_INPUT_A] = 0x34;                 // . (period): team
-    keys[FGC_INPUT_LEFT_BUMPER] = 0x16;       // U: parry
+    keys[FGC_INPUT_RIGHT_BUMPER] = 0x26;      // L: heavy
+    keys[FGC_INPUT_A] = 0x32;                 // M: special 1
+    keys[FGC_INPUT_B] = 0x33;                 // , (comma): special 2
+    keys[FGC_INPUT_RIGHT_TRIGGER] = 0x34;     // . (period): team
+    keys[FGC_INPUT_LEFT_TRIGGER] = 0x16;      // U: parry
     keys[FGC_INPUT_RIGHT_STICK_CLICK] = 0x13; // R: taunt
     keys[FGC_INPUT_LEFT_STICK_CLICK] = 0x17;  // I: throw (spare)
     keys[FGC_INPUT_RIGHT_STICK_DOWN] = 0x18;  // O: break (spare)
