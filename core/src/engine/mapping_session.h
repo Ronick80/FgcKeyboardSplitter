@@ -65,6 +65,14 @@ public:
         return startedAt_;
     }
 
+    // Set once Windows was seen listing this session's pad. Control plane only (the context's control lock).
+    void markPadVisible() noexcept {
+        padVisible_ = true;
+    }
+    bool padVisible() const noexcept {
+        return padVisible_;
+    }
+
     // Lock-free; safe while the thread runs.
     LatencySnapshot latency() const noexcept;
     void resetLatency() noexcept;
@@ -80,6 +88,7 @@ private:
     std::atomic<bool> finished_{false};
     std::atomic<bool> disconnected_{false};
     const std::chrono::steady_clock::time_point startedAt_ = std::chrono::steady_clock::now();
+    bool padVisible_ = false;
 
     // Written only by the mapping thread (and zeroed by resetLatency()); read by latency().
     std::atomic<uint64_t> latencySamples_{0};

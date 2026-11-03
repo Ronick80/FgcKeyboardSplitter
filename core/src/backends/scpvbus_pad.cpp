@@ -83,6 +83,56 @@ void unregisterPad(uint32_t slot) {
     g_registeredPads[slot - 1].bus.store(nullptr);
 }
 
+// ScpVBus unplugs every pad on the bus whenever any handle to it is closed, even one that never plugged a
+// pad. So a pad hands its handle back here instead of closing it, and the handles are only closed once no
+// pad of ours is left to lose.
+class BusHandlePool {
+public:
+    // Counts the caller as a live pad until release(). INVALID_HANDLE_VALUE (with GetLastError set) on failure.
+    HANDLE acquire(const std::wstring& path) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        HANDLE bus = INVALID_HANDLE_VALUE;
+        if (!idle_.empty()) {
+            bus = idle_.back();
+            idle_.pop_back();
+        } else {
+            bus = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        }
+        if (bus != INVALID_HANDLE_VALUE) {
+            ++inUse_;
+        }
+        return bus;
+    }
+
+    void release(HANDLE bus) noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
+        --inUse_;
+        try {
+            idle_.push_back(bus);
+        } catch (...) {
+            // Leaking the handle until the process exits is better than unplugging the other pads.
+            return;
+        }
+        if (inUse_ == 0) {
+            for (const HANDLE idle : idle_) {
+                CloseHandle(idle);
+            }
+            idle_.clear();
+        }
+    }
+
+private:
+    std::mutex mutex_;
+    std::vector<HANDLE> idle_;
+    size_t inUse_ = 0;
+};
+
+BusHandlePool& busHandles() {
+    static BusHandlePool* pool = new BusHandlePool;  // never destroyed, so it outlives pads freed at exit
+    return *pool;
+}
+
 // Each pad keeps its own bus handle: synchronous IOCTLs on one handle are serialized, which
 // would couple the latency of separate keyboards.
 class ScpVBusPad final : public IVirtualPad {
@@ -98,7 +148,7 @@ public:
         unregisterPad(slot_);
         reset();
         unplugSlot(bus_, slot_);
-        CloseHandle(bus_);
+        busHandles().release(bus_);
     }
 
     FgcResult submit(const PadState& state) noexcept override {
@@ -182,8 +232,7 @@ FgcResult ScpVBusPadBus::plugIn(std::unique_ptr<IVirtualPad>& out) {
     }
     installCrashHandlers();
 
-    const HANDLE bus = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                   nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    const HANDLE bus = busHandles().acquire(path);
     if (bus == INVALID_HANDLE_VALUE) {
         return GetLastError() == ERROR_ACCESS_DENIED ? FGC_ERR_ACCESS_DENIED : FGC_ERR_IO;
     }
@@ -197,7 +246,7 @@ FgcResult ScpVBusPadBus::plugIn(std::unique_ptr<IVirtualPad>& out) {
         }
     }
 
-    CloseHandle(bus);
+    busHandles().release(bus);  // closing it here would unplug every running pad
     return FGC_ERR_CONTROLLER_LIMIT;
 }
 

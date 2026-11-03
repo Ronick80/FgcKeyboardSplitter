@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -87,16 +88,21 @@ FgcResult copyName(const std::string& name, char* out, uint32_t size) {
     return FGC_OK;
 }
 
-// Windows needs a moment to list a freshly plugged pad, so a young pad is not yet subtracted from the
-// XInput count; that errs toward refusing a start rather than allowing a fifth controller.
+// Windows needs a moment to list a freshly plugged pad, so a pad is only subtracted from the XInput count
+// once fgc_start saw it appear, or failing that after kPadSettleTime. Until then it errs toward refusing a
+// start rather than allowing a fifth controller.
 constexpr std::chrono::seconds kPadSettleTime{3};
+
+// How long fgc_start waits for XInput to list the new pad. It usually takes well under 100 ms.
+constexpr std::chrono::milliseconds kPadAppearTimeout{500};
+constexpr std::chrono::milliseconds kPadAppearPoll{5};
 
 // Caller holds the control lock.
 FgcControllerLimit limitFor(const FgcContext& context, uint32_t requested) {
     const auto now = std::chrono::steady_clock::now();
     uint32_t settled = 0;
     for (const auto& entry : context.sessions) {
-        if (now - entry.second->startedAt() >= kPadSettleTime) {
+        if (entry.second->padVisible() || now - entry.second->startedAt() >= kPadSettleTime) {
             ++settled;
         }
     }
@@ -473,6 +479,8 @@ FGC_API FgcResult fgc_start(FgcContext* context, const char* hardware_id) {
             return FGC_ERR_CONTROLLER_LIMIT;
         }
 
+        const uint32_t listedBefore = context->counter->connected();
+
         // Plug the pad in before capturing, so no keystroke is swallowed without a pad to receive it.
         std::unique_ptr<fgc::IVirtualPad> pad;
         FgcResult result = context->padBus->plugIn(pad);
@@ -490,6 +498,16 @@ FGC_API FgcResult fgc_start(FgcContext* context, const char* hardware_id) {
         auto session = std::make_unique<fgc::MappingSession>(id, std::move(keyboard), std::move(pad),
                                                              currentKeys(*context, id), context->runningSessions, context->events);
         session->start();
+
+        // Otherwise the new pad would count as another program's controller until kPadSettleTime passes.
+        const auto deadline = std::chrono::steady_clock::now() + kPadAppearTimeout;
+        while (context->counter->connected() <= listedBefore && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(kPadAppearPoll);
+        }
+        if (context->counter->connected() > listedBefore) {
+            session->markPadVisible();
+        }
+
         context->sessions.emplace(id, std::move(session));
         return FGC_OK;
     });
