@@ -272,6 +272,11 @@ FGC_API FgcResult fgc_stop(FgcContext* context, const char* hardware_id);
 FGC_API FgcResult fgc_stop_all(FgcContext* context);
 /* [control] Sets *out_running to nonzero while the keyboard's mapping thread is alive. */
 FGC_API FgcResult fgc_is_running(FgcContext* context, const char* hardware_id, int32_t* out_running);
+/* [control] The Xbox inputs a running keyboard holds right now: bit (1u << FgcXboxInput) is set while a key bound to
+   that input is down, so a UI can show its mapping working. The mapping thread publishes this after each controller
+   report, so reading it never delays a report; polling about once per frame is fine. FGC_ERR_NOT_RUNNING (and 0)
+   when the keyboard is not running. */
+FGC_API FgcResult fgc_get_held_inputs(FgcContext* context, const char* hardware_id, uint32_t* out_inputs);
 /* [lock-free] */
 FGC_API FgcResult fgc_get_status(FgcContext* context, FgcStatus* out_status);
 /* [lock-free] Pops one event; out_event->type is FGC_EVENT_NONE when the queue is empty. */
