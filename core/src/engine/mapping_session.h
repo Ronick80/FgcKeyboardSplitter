@@ -78,6 +78,11 @@ public:
         return heldInputs_.value.load(std::memory_order_relaxed);
     }
 
+    // Key presses since the session started, repeats excluded; wraps around. Lock-free; safe while the thread runs.
+    uint32_t keyPresses() const noexcept {
+        return heldInputs_.presses.load(std::memory_order_relaxed);
+    }
+
     // Lock-free; safe while the thread runs.
     LatencySnapshot latency() const noexcept;
     void resetLatency() noexcept;
@@ -106,12 +111,13 @@ private:
     std::atomic<uint64_t> latencyReportMaxTicks_{0};
     std::atomic<uint32_t> latencyResets_{0};  // the thread restarts its own totals when this changes
 
-    // Written by the mapping thread after each report, read by a UI that shows held inputs. It has a cache line
-    // to itself, so those reads never touch the line the thread's other per-event state lives on.
+    // Written by the mapping thread after each report, read by a UI that shows held inputs and key activity. It has
+    // a cache line to itself, so those reads never touch the line the thread's other per-event state lives on.
 #pragma warning(push)
 #pragma warning(disable : 4324)  // padded to the cache line on purpose
     struct alignas(64) HeldInputs {
         std::atomic<uint32_t> value{0};
+        std::atomic<uint32_t> presses{0};
     };
     HeldInputs heldInputs_;
 #pragma warning(pop)

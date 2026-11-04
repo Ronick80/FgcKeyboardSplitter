@@ -4,9 +4,22 @@
 
 #include <winioctl.h>
 
-#include <atomic>
+// initguid makes devguid.h and devpkey.h define the GUIDs and property keys used here (selectany, so another
+// file doing the same is fine).
+#include <initguid.h>
+
+#include <cfgmgr32.h>
+#include <devguid.h>
+#include <devpkey.h>
+#include <setupapi.h>
+
+#include <combaseapi.h>
+
+#include <cwctype>
+#include <deque>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -145,6 +158,88 @@ std::string readHardwareId(HANDLE device) {
         return {};
     }
     return toUtf8(buffer);
+}
+
+std::wstring upper(std::wstring text) {
+    for (wchar_t& c : text) {
+        c = static_cast<wchar_t>(std::towupper(c));
+    }
+    return text;
+}
+
+std::wstring stringProperty(DEVINST node, const DEVPROPKEY& key) {
+    DEVPROPTYPE type = 0;
+    ULONG bytes = 0;
+    if (CM_Get_DevNode_PropertyW(node, &key, &type, nullptr, &bytes, 0) != CR_BUFFER_SMALL ||
+        type != DEVPROP_TYPE_STRING || bytes < sizeof(wchar_t)) {
+        return {};
+    }
+    std::wstring value(bytes / sizeof(wchar_t), L'\0');
+    if (CM_Get_DevNode_PropertyW(node, &key, &type, reinterpret_cast<PBYTE>(value.data()), &bytes, 0) != CR_SUCCESS) {
+        return {};
+    }
+    value.resize(wcsnlen(value.c_str(), value.size()));
+    return value;
+}
+
+// What Windows knows about one present keyboard interface.
+struct PnpKeyboard {
+    std::string productName;
+    std::string containerId;
+};
+
+// Present keyboard-class interfaces, keyed by their first hardware ID in upper case (the ID Interception reports).
+// Identical devices share a key, so a key with several entries cannot be tied to one physical device.
+std::map<std::wstring, std::vector<PnpKeyboard>> presentKeyboards() {
+    std::map<std::wstring, std::vector<PnpKeyboard>> result;
+    const HDEVINFO set = SetupDiGetClassDevsW(&GUID_DEVCLASS_KEYBOARD, nullptr, nullptr, DIGCF_PRESENT);
+    if (set == INVALID_HANDLE_VALUE) {
+        return result;
+    }
+    SP_DEVINFO_DATA info{};
+    info.cbSize = sizeof(info);
+    for (DWORD i = 0; SetupDiEnumDeviceInfo(set, i, &info); ++i) {
+        wchar_t ids[1024] = {};
+        if (!SetupDiGetDeviceRegistryPropertyW(set, &info, SPDRP_HARDWAREID, nullptr, reinterpret_cast<PBYTE>(ids),
+                                               sizeof(ids) - 2 * sizeof(wchar_t), nullptr) ||
+            ids[0] == L'\0') {
+            continue;
+        }
+
+        PnpKeyboard keyboard;
+        DEVPROPTYPE type = 0;
+        GUID container{};
+        if (SetupDiGetDevicePropertyW(set, &info, &DEVPKEY_Device_ContainerId, &type, reinterpret_cast<PBYTE>(&container),
+                                      sizeof(container), nullptr, 0) &&
+            type == DEVPROP_TYPE_GUID) {
+            wchar_t text[64] = {};
+            if (StringFromGUID2(container, text, 64) > 0) {
+                keyboard.containerId = toUtf8(text);
+            }
+        }
+
+        // A HID keyboard's own name is generic ("HID Keyboard Device"); its USB parent carries the product name.
+        std::wstring name = stringProperty(info.DevInst, DEVPKEY_Device_BusReportedDeviceDesc);
+        DEVINST parent = 0;
+        if (name.empty() && CM_Get_Parent(&parent, info.DevInst, 0) == CR_SUCCESS) {
+            name = stringProperty(parent, DEVPKEY_Device_BusReportedDeviceDesc);
+        }
+        keyboard.productName = toUtf8(name.c_str());
+
+        result[upper(ids)].push_back(std::move(keyboard));
+    }
+    SetupDiDestroyDeviceInfoList(set);
+    return result;
+}
+
+std::wstring toWide(const std::string& text) {
+    const int size = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
+    if (size <= 1) {
+        return {};
+    }
+    std::wstring result(static_cast<size_t>(size - 1), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, result.data(), size);
+    return result;
 }
 
 int64_t qpcNow() {
@@ -321,9 +416,14 @@ public:
     }
 
     bool poll(std::string& hardwareId) override {
-        const int number = identified_.load(std::memory_order_acquire);
-        if (number == 0) {
-            return false;
+        int number = 0;
+        {
+            std::lock_guard<std::mutex> lock(pressesLock_);
+            if (presses_.empty()) {
+                return false;
+            }
+            number = presses_.front();
+            presses_.pop_front();
         }
         for (const Source& source : sources_) {
             if (source.number == number) {
@@ -340,6 +440,7 @@ private:
         std::string hardwareId;
         HANDLE device = INVALID_HANDLE_VALUE;
         HANDLE unempty = nullptr;
+        std::vector<bool> down = std::vector<bool>(0x200);  // keys seen down, by FgcMapping key code
     };
 
     static bool capture(Source& source) {
@@ -382,14 +483,13 @@ private:
         }
 
         RawKeyStroke strokes[kStrokesPerRead];
-        bool found = false;
-        while (!found) {
+        for (;;) {
             const DWORD waited =
                 WaitForMultipleObjects(static_cast<DWORD>(handles.size()), handles.data(), FALSE, INFINITE);
             if (waited == WAIT_OBJECT_0 || waited >= WAIT_OBJECT_0 + handles.size()) {
                 break;
             }
-            const Source& source = sources_[waited - WAIT_OBJECT_0 - 1];
+            Source& source = sources_[waited - WAIT_OBJECT_0 - 1];
 
             DWORD bytes = 0;
             if (!DeviceIoControl(source.device, kIoctlRead, nullptr, 0, strokes, sizeof(strokes), &bytes, nullptr)) {
@@ -402,11 +502,21 @@ private:
             DeviceIoControl(source.device, kIoctlWrite, strokes, static_cast<DWORD>(count * sizeof(RawKeyStroke)),
                             nullptr, 0, &bytes, nullptr);
 
+            bool pressed = false;
             for (size_t i = 0; i < count; ++i) {
-                if ((strokes[i].flags & (kStrokeUp | kStrokeE1)) == 0) {
-                    identified_.store(source.number, std::memory_order_release);
-                    found = true;
-                    break;
+                if (strokes[i].flags & kStrokeE1) {
+                    continue;
+                }
+                const size_t key = (strokes[i].makeCode & 0xFFu) | ((strokes[i].flags & kStrokeE0) ? 0x100u : 0u);
+                const bool down = (strokes[i].flags & kStrokeUp) == 0;
+                // Holding a key repeats its press; only the first one counts.
+                pressed = pressed || (down && !source.down[key]);
+                source.down[key] = down;
+            }
+            if (pressed) {
+                std::lock_guard<std::mutex> lock(pressesLock_);
+                if (presses_.size() < kMaxQueuedPresses) {
+                    presses_.push_back(source.number);
                 }
             }
         }
@@ -416,9 +526,12 @@ private:
         }
     }
 
+    static constexpr size_t kMaxQueuedPresses = 64;
+
     HANDLE stop_ = nullptr;
-    std::vector<Source> sources_;  // fixed once the thread starts, apart from handles the thread closes
-    std::atomic<int> identified_{0};  // Interception keyboard number of the first key press, 0 if none
+    std::vector<Source> sources_;  // fixed once the thread starts, apart from handles and key state the thread owns
+    std::mutex pressesLock_;
+    std::deque<int> presses_;  // Interception keyboard numbers of unreported key presses, oldest first
     std::thread thread_;
 };
 
@@ -469,16 +582,28 @@ FgcResult InterceptionKeyboardInput::enumerate(std::vector<KeyboardDevice>& out)
         return fromWin32Error(lastError);
     }
 
+    const std::map<std::wstring, std::vector<PnpKeyboard>> pnp = presentKeyboards();
     std::map<std::string, int> occurrences;
     for (Known& known : found) {
         const int count = ++occurrences[known.rawHardwareId];
         known.hardwareId = count == 1 ? known.rawHardwareId : known.rawHardwareId + "#" + std::to_string(count);
+
+        const auto match = pnp.find(upper(toWide(known.rawHardwareId)));
+        if (match != pnp.end() && !match->second.empty()) {
+            // Identical devices share their name, but not a device ID that could be told apart.
+            known.productName = match->second.front().productName;
+            known.deviceId = match->second.size() == 1 ? match->second.front().containerId : std::string();
+        } else {
+            known.productName.clear();
+            known.deviceId.clear();
+        }
     }
 
     known_ = std::move(found);
     out.clear();
     for (const Known& known : known_) {
-        out.push_back({known.hardwareId, "Keyboard " + std::to_string(known.deviceNumber) + " - " + known.rawHardwareId});
+        out.push_back({known.hardwareId, "Keyboard " + std::to_string(known.deviceNumber) + " - " + known.rawHardwareId,
+                       known.productName, known.deviceId});
     }
     return FGC_OK;
 }

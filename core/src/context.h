@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <map>
 #include <memory>
@@ -26,7 +27,10 @@ struct FgcContext {
     std::mutex controlLock;
     std::vector<fgc::KeyboardDevice> keyboards;
     std::map<std::string, fgc::KeyArray> mappings;  // per keyboard hardware ID; absent means default
-    std::unique_ptr<fgc::IIdentifySession> identify;
+    std::unique_ptr<fgc::IIdentifySession> identify;  // identify mode or watch mode, whichever is active
+    bool watching = false;  // watch mode: identify is rebuilt as keyboards start, stop, appear or disappear
+    std::chrono::steady_clock::time_point watchRescanAt{};
+    size_t watchedSessionCount = 0;  // sessions that existed when the watch was last rebuilt
 
     std::atomic<uint32_t> runningSessions{0};
     fgc::EventQueue events;

@@ -16,6 +16,8 @@ private:
         int deviceNumber = 0;  // Interception keyboard number, 1..10
         std::string rawHardwareId;
         std::string hardwareId;  // raw id, with #N appended for identical keyboards after the first
+        std::string productName;
+        std::string deviceId;
     };
 
     // Last scan; a keyboard held by one of our own sessions can't be reopened, so it is reported from here.

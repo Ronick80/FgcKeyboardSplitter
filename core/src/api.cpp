@@ -130,6 +130,47 @@ bool toKeys(const FgcMapping& mapping, fgc::KeyArray& keys) {
     return true;
 }
 
+// Callers built before product_name and device_id existed pass the smaller size; they just get the first part.
+constexpr size_t kKeyboardInfoBaseSize = offsetof(FgcKeyboardInfo, product_name);
+
+bool validKeyboardInfo(const FgcKeyboardInfo* info) {
+    return info != nullptr && info->struct_size >= kKeyboardInfoBaseSize;
+}
+
+void fillKeyboardInfo(const fgc::KeyboardDevice& device, FgcKeyboardInfo& out) {
+    copyTruncated(out.hardware_id, FGC_HARDWARE_ID_MAX, device.hardwareId);
+    copyTruncated(out.display_name, FGC_DISPLAY_NAME_MAX, device.displayName);
+    if (out.struct_size >= sizeof(FgcKeyboardInfo)) {
+        copyTruncated(out.product_name, FGC_DISPLAY_NAME_MAX, device.productName);
+        copyTruncated(out.device_id, FGC_HARDWARE_ID_MAX, device.deviceId);
+    }
+}
+
+constexpr std::chrono::milliseconds kWatchRescanInterval{1000};
+
+// Caller holds the control lock. Rebuilds the watch over the keyboards that are idle right now. A keyboard
+// session can only open a keyboard the watch is not holding, so callers drop the watch first (identify.reset()).
+void rebuildWatch(FgcContext& context) noexcept {
+    try {
+        context.identify.reset();
+        context.watchedSessionCount = context.sessions.size();
+        if (context.watching) {
+            // Fails harmlessly when every keyboard is running; a later stop or rescan rebuilds it.
+            context.keyboard->beginIdentify(context.identify);
+        }
+    } catch (...) {
+        context.identify.reset();
+    }
+}
+
+// Rebuilds the watch when the guarded function returns, so keyboards it started or stopped leave or rejoin it.
+struct WatchRebuild {
+    FgcContext& context;
+    ~WatchRebuild() {
+        rebuildWatch(context);
+    }
+};
+
 constexpr std::chrono::milliseconds kWatchdogInterval{1000};
 
 // Ends sessions whose keyboard was unplugged and clears finished ones, which frees their virtual pad slot.
@@ -232,7 +273,7 @@ FGC_API FgcResult fgc_get_keyboard_count(FgcContext* context, uint32_t* out_coun
 }
 
 FGC_API FgcResult fgc_get_keyboard(FgcContext* context, uint32_t index, FgcKeyboardInfo* out_info) {
-    if (!context || !validStruct(out_info)) {
+    if (!context || !validKeyboardInfo(out_info)) {
         return FGC_ERR_INVALID_ARGUMENT;
     }
     return guarded([&] {
@@ -240,9 +281,7 @@ FGC_API FgcResult fgc_get_keyboard(FgcContext* context, uint32_t index, FgcKeybo
         if (index >= context->keyboards.size()) {
             return FGC_ERR_NOT_FOUND;
         }
-        const fgc::KeyboardDevice& device = context->keyboards[index];
-        copyTruncated(out_info->hardware_id, FGC_HARDWARE_ID_MAX, device.hardwareId);
-        copyTruncated(out_info->display_name, FGC_DISPLAY_NAME_MAX, device.displayName);
+        fillKeyboardInfo(context->keyboards[index], *out_info);
         return FGC_OK;
     });
 }
@@ -253,6 +292,7 @@ FGC_API FgcResult fgc_identify_begin(FgcContext* context) {
     }
     return guarded([&] {
         std::lock_guard<std::mutex> lock(context->controlLock);
+        context->watching = false;
         context->identify.reset();
         return context->keyboard->beginIdentify(context->identify);
     });
@@ -264,7 +304,104 @@ FGC_API FgcResult fgc_identify_cancel(FgcContext* context) {
     }
     return guarded([&] {
         std::lock_guard<std::mutex> lock(context->controlLock);
+        context->watching = false;
         context->identify.reset();
+        return FGC_OK;
+    });
+}
+
+FGC_API FgcResult fgc_watch_begin(FgcContext* context) {
+    if (!context) {
+        return FGC_ERR_INVALID_ARGUMENT;
+    }
+    return guarded([&] {
+        std::lock_guard<std::mutex> lock(context->controlLock);
+        if (context->keyboard->driverState() != fgc::DriverState::Installed) {
+            return FGC_ERR_DRIVER_MISSING;
+        }
+        context->watching = true;
+        context->watchRescanAt = std::chrono::steady_clock::time_point{};  // rescan on the first poll
+        rebuildWatch(*context);
+        return FGC_OK;
+    });
+}
+
+FGC_API FgcResult fgc_watch_end(FgcContext* context) {
+    if (!context) {
+        return FGC_ERR_INVALID_ARGUMENT;
+    }
+    return guarded([&] {
+        std::lock_guard<std::mutex> lock(context->controlLock);
+        context->watching = false;
+        context->identify.reset();
+        return FGC_OK;
+    });
+}
+
+FGC_API FgcResult fgc_watch_poll(FgcContext* context, FgcKeyboardInfo* out_info, int32_t* out_pressed) {
+    if (!context || !validKeyboardInfo(out_info) || !out_pressed) {
+        return FGC_ERR_INVALID_ARGUMENT;
+    }
+    *out_pressed = 0;
+    return guarded([&] {
+        std::lock_guard<std::mutex> lock(context->controlLock);
+        if (!context->watching) {
+            return FGC_OK;
+        }
+
+        std::string hardwareId;
+        if (context->identify && context->identify->poll(hardwareId)) {
+            const auto find = [&]() -> const fgc::KeyboardDevice* {
+                for (const fgc::KeyboardDevice& device : context->keyboards) {
+                    if (device.hardwareId == hardwareId) {
+                        return &device;
+                    }
+                }
+                return nullptr;
+            };
+            const fgc::KeyboardDevice* device = find();
+            if (!device) {
+                // The cached list predates this keyboard.
+                std::vector<fgc::KeyboardDevice> found;
+                if (context->keyboard->enumerate(found) == FGC_OK) {
+                    context->keyboards = std::move(found);
+                    device = find();
+                }
+            }
+            if (device) {
+                fillKeyboardInfo(*device, *out_info);
+                *out_pressed = 1;
+            }
+            return FGC_OK;
+        }
+
+        // Nothing queued: pick up keyboards that were plugged in, and ones a session gave back (stopped, or ended
+        // by the watchdog). Rebuilding drops queued presses, which is why it only happens when the queue is empty.
+        const auto now = std::chrono::steady_clock::now();
+        if (now < context->watchRescanAt) {
+            return FGC_OK;
+        }
+        context->watchRescanAt = now + kWatchRescanInterval;
+        std::vector<fgc::KeyboardDevice> found;
+        if (context->keyboard->enumerate(found) != FGC_OK) {
+            return FGC_OK;
+        }
+        const auto sameIds = [&] {
+            if (found.size() != context->keyboards.size()) {
+                return false;
+            }
+            for (size_t i = 0; i < found.size(); ++i) {
+                if (found[i].hardwareId != context->keyboards[i].hardwareId) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        const bool changed = !sameIds() || context->sessions.size() != context->watchedSessionCount;
+        context->keyboards = std::move(found);
+        if (changed) {
+            rebuildWatch(*context);
+        }
         return FGC_OK;
     });
 }
@@ -499,6 +636,7 @@ FGC_API FgcResult fgc_start(FgcContext* context, const char* hardware_id) {
         }
 
         context->identify.reset();  // it holds every idle keyboard open
+        const WatchRebuild rebuild{*context};  // watch mode carries on without this keyboard
         std::unique_ptr<fgc::IKeyboardSession> keyboard;
         result = context->keyboard->open(id, keyboard);
         if (result != FGC_OK) {
@@ -534,6 +672,9 @@ FGC_API FgcResult fgc_stop(FgcContext* context, const char* hardware_id) {
             return FGC_ERR_NOT_RUNNING;
         }
         context->sessions.erase(session);
+        if (context->watching) {
+            rebuildWatch(*context);  // the released keyboard can join again
+        }
         return FGC_OK;
     });
 }
@@ -545,6 +686,9 @@ FGC_API FgcResult fgc_stop_all(FgcContext* context) {
     return guarded([&] {
         std::lock_guard<std::mutex> lock(context->controlLock);
         context->sessions.clear();
+        if (context->watching) {
+            rebuildWatch(*context);  // the released keyboards can join again
+        }
         return FGC_OK;
     });
 }
@@ -596,6 +740,22 @@ FGC_API FgcResult fgc_get_held_inputs(FgcContext* context, const char* hardware_
             return FGC_ERR_NOT_RUNNING;
         }
         *out_inputs = session->second->heldInputs();
+        return FGC_OK;
+    });
+}
+
+FGC_API FgcResult fgc_get_key_press_count(FgcContext* context, const char* hardware_id, uint32_t* out_count) {
+    if (!context || !hardware_id || !out_count) {
+        return FGC_ERR_INVALID_ARGUMENT;
+    }
+    return guarded([&] {
+        std::lock_guard<std::mutex> lock(context->controlLock);
+        const auto session = context->sessions.find(hardware_id);
+        if (session == context->sessions.end() || session->second->finished()) {
+            *out_count = 0;
+            return FGC_ERR_NOT_RUNNING;
+        }
+        *out_count = session->second->keyPresses();
         return FGC_OK;
     });
 }
