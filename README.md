@@ -230,6 +230,9 @@ samples/   Calling the C API from C#
 drivers/   ScpVBus driver files
 ```
 
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains how the engine works inside: the input path, threads, live
+remapping, session lifecycle, keyboard discovery and the design trade-offs, with diagrams.
+
 The keyboard and controller backends sit behind small interfaces (`core/src/backends`), so the engine does not
 depend on Interception or ScpVBus directly. The Interception driver is driven through its device interface
 rather than `interception.dll`: the library opens every keyboard exclusively per context, which would stop
