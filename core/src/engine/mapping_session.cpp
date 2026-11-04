@@ -126,6 +126,7 @@ void MappingSession::run() noexcept {
     uint64_t reportSumTicks = 0;
     uint64_t reportMaxTicks = 0;
     uint32_t seenResets = 0;
+    uint32_t presses = 0;
     WaitResult ended = WaitResult::Interrupted;
 
     while ((ended = keyboard_->wait(event)) == WaitResult::Event) {
@@ -134,6 +135,9 @@ void MappingSession::run() noexcept {
             continue;
         }
         const uint64_t bit = uint64_t{1} << (key & 63);
+        // Holding a key repeats its press; only the first one counts.
+        const bool newPress = event.down && (keysDown[key >> 6] & bit) == 0;
+        presses += newPress ? 1u : 0u;
         if (event.down) {
             keysDown[key >> 6] |= bit;
         } else {
@@ -156,6 +160,7 @@ void MappingSession::run() noexcept {
         const PadState state = computePadState(held);
         if (state == submitted) {
             heldInputs_.value.store(held, std::memory_order_relaxed);
+            heldInputs_.presses.store(presses, std::memory_order_relaxed);
             continue;
         }
         LARGE_INTEGER beforeReport;
@@ -196,6 +201,7 @@ void MappingSession::run() noexcept {
 
         // Published only after the report went out, so showing held inputs never delays the controller.
         heldInputs_.value.store(held, std::memory_order_relaxed);
+        heldInputs_.presses.store(presses, std::memory_order_relaxed);
     }
 
     heldInputs_.value.store(0, std::memory_order_relaxed);

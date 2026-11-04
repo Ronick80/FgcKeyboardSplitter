@@ -118,6 +118,12 @@ typedef struct FgcKeyboardInfo {
     uint32_t struct_size;
     char hardware_id[FGC_HARDWARE_ID_MAX]; /* stable across reboots and ports where possible */
     char display_name[FGC_DISPLAY_NAME_MAX];
+    /* Each entry is one keyboard interface; a physical device can expose several (a keyboard's media keys, a
+     * mouse's macro buttons). The fields below are filled only when the caller's struct_size covers them. */
+    char product_name[FGC_DISPLAY_NAME_MAX]; /* name the device reports, e.g. "GMMK PRO"; "" if unknown */
+    /* Same for every interface of one physical device. "" when it cannot be told apart from an identical
+     * device that is also plugged in. */
+    char device_id[FGC_HARDWARE_ID_MAX];
 } FgcKeyboardInfo;
 
 typedef struct FgcControllerLimit {
@@ -195,6 +201,16 @@ FGC_API FgcResult fgc_identify_begin(FgcContext* context);
 FGC_API FgcResult fgc_identify_cancel(FgcContext* context);
 /* [control] Sets *out_index to the identified keyboard's list index, or -1 if no key was pressed yet. */
 FGC_API FgcResult fgc_identify_poll(FgcContext* context, int32_t* out_index);
+/* [control] Starts reporting every key press on idle keyboards, for a "press any key to join" screen. Their keys
+ * still reach Windows normally. Watching continues until fgc_watch_end: keyboards that start drop out of it,
+ * keyboards that stop rejoin it, and newly plugged keyboards are picked up. Replaces identify mode. */
+FGC_API FgcResult fgc_watch_begin(FgcContext* context);
+/* [control] Stops watching. */
+FGC_API FgcResult fgc_watch_end(FgcContext* context);
+/* [control] Takes the oldest key press not yet returned. *out_pressed is nonzero when out_info holds the keyboard
+ * interface it came from (key repeats from holding a key are not reported). Call it regularly while watching; it
+ * also rescans for plugged-in keyboards about once a second. */
+FGC_API FgcResult fgc_watch_poll(FgcContext* context, FgcKeyboardInfo* out_info, int32_t* out_pressed);
 
 /* Mapping (live: takes effect on a running session without stalling input) */
 
@@ -277,6 +293,10 @@ FGC_API FgcResult fgc_is_running(FgcContext* context, const char* hardware_id, i
    report, so reading it never delays a report; polling about once per frame is fine. FGC_ERR_NOT_RUNNING (and 0)
    when the keyboard is not running. */
 FGC_API FgcResult fgc_get_held_inputs(FgcContext* context, const char* hardware_id, uint32_t* out_inputs);
+/* [control] How many keys a running keyboard has pressed since it started (key repeats excluded; wraps around), so
+   a UI can notice which running keyboard is being used. Published like held inputs, so it never delays a report.
+   FGC_ERR_NOT_RUNNING (and 0) when the keyboard is not running. */
+FGC_API FgcResult fgc_get_key_press_count(FgcContext* context, const char* hardware_id, uint32_t* out_count);
 /* [lock-free] */
 FGC_API FgcResult fgc_get_status(FgcContext* context, FgcStatus* out_status);
 /* [lock-free] Pops one event; out_event->type is FGC_EVENT_NONE when the queue is empty. */

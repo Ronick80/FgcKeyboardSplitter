@@ -11,9 +11,12 @@ namespace fgc {
 
 enum class DriverState { NotInstalled, RebootRequired, Installed };
 
+// One keyboard interface. A physical device can expose several.
 struct KeyboardDevice {
     std::string hardwareId;
     std::string displayName;
+    std::string productName;  // empty when Windows reports none
+    std::string deviceId;     // shared by the interfaces of one physical device; empty when ambiguous
 };
 
 // keyCode uses the FgcMapping encoding (set-1 scan code, 0x100 for E0-prefixed keys).
@@ -47,12 +50,12 @@ public:
     virtual void releaseKeys(const uint16_t* keyCodes, size_t count) noexcept = 0;
 };
 
-// Reports which keyboard produces the next key press. Key presses still reach Windows unchanged.
+// Reports which keyboard each key press comes from. Key presses still reach Windows unchanged.
 class IIdentifySession {
 public:
     virtual ~IIdentifySession() = default;
 
-    // Non-blocking. True once a key press was seen, with that keyboard's hardware ID.
+    // Non-blocking. Takes the oldest unreported key press (repeats excluded), with its keyboard's hardware ID.
     virtual bool poll(std::string& hardwareId) = 0;
 };
 

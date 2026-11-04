@@ -36,5 +36,5 @@ target_include_directories(FgcCore
 
 target_compile_definitions(FgcCore PRIVATE FGC_CORE_BUILD NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
 target_compile_options(FgcCore PRIVATE /W4 /permissive- /utf-8)
-target_link_libraries(FgcCore PRIVATE fgc_version nlohmann_json::nlohmann_json setupapi version advapi32 avrt shell32 ole32 xinput)
+target_link_libraries(FgcCore PRIVATE fgc_version nlohmann_json::nlohmann_json setupapi cfgmgr32 version advapi32 avrt shell32 ole32 xinput)
 fgc_add_version_resource(FgcCore VFT_DLL "FgcCore.dll" "${FGC_PROJECT_NAME} engine")

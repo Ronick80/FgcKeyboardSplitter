@@ -69,7 +69,10 @@ void printUsage() {
         "  FgcCli run <index|hardware-id> [seconds]\n"
         "      Map that keyboard to a virtual Xbox controller until Ctrl+C, or for the given number of\n"
         "      seconds. The keyboard is hidden from other programs meanwhile, so stop with Ctrl+C typed on\n"
-        "      a different keyboard, or pass a number of seconds.");
+        "      a different keyboard, or pass a number of seconds.\n"
+        "  FgcCli watch [seconds]\n"
+        "      Print which keyboard each key press comes from (keys still reach other programs), until\n"
+        "      Ctrl+C or for the given number of seconds.");
 }
 
 int list(FgcContext* core) {
@@ -86,8 +89,32 @@ int list(FgcContext* core) {
         std::puts("No keyboards found.");
     }
     for (size_t i = 0; i < keyboards.size(); ++i) {
-        std::printf("[%zu] %s\n", i, keyboards[i].display_name);
+        std::printf("[%zu] %s\n    product: %s\n    device:  %s\n", i, keyboards[i].display_name,
+                    keyboards[i].product_name[0] ? keyboards[i].product_name : "(unknown)",
+                    keyboards[i].device_id[0] ? keyboards[i].device_id : "(ambiguous)");
     }
+    return 0;
+}
+
+int watch(FgcContext* core, int seconds) {
+    const FgcResult begun = fgc_watch_begin(core);
+    if (begun != FGC_OK) {
+        std::fprintf(stderr, "Watch failed: %s\n", describe(begun));
+        return 1;
+    }
+    std::puts("Press keys on any keyboard...");
+    const ULONGLONG begin = GetTickCount64();
+    while (!g_stop && (seconds <= 0 || GetTickCount64() - begin < static_cast<ULONGLONG>(seconds) * 1000)) {
+        FgcKeyboardInfo info{};
+        info.struct_size = sizeof(info);
+        int32_t pressed = 0;
+        while (fgc_watch_poll(core, &info, &pressed) == FGC_OK && pressed) {
+            std::printf("%s  [%s]  %s\n", info.product_name[0] ? info.product_name : "(unknown)",
+                        info.device_id[0] ? info.device_id : "ambiguous", info.hardware_id);
+        }
+        Sleep(30);
+    }
+    fgc_watch_end(core);
     return 0;
 }
 
@@ -166,6 +193,8 @@ int main(int argc, char** argv) {
     } else if (std::strcmp(argv[1], "version") == 0 || std::strcmp(argv[1], "--version") == 0) {
         std::printf("%s %s\n", FGC_PROJECT_NAME, fgc_get_version());
         result = 0;
+    } else if (std::strcmp(argv[1], "watch") == 0) {
+        result = watch(core, argc >= 3 ? std::atoi(argv[2]) : 0);
     } else if (std::strcmp(argv[1], "run") == 0 && argc >= 3) {
         result = run(core, argv[2], argc >= 4 ? std::atoi(argv[3]) : 0);
     } else {
