@@ -87,7 +87,10 @@ KeyArray twoXkoDefaultKeys() {
     return keys;
 }
 
+// The first built-in profile is where a keyboard without a last-used profile starts. "Default" is the mapping
+// fgc_get_default_mapping returns.
 constexpr BuiltinProfile kBuiltinProfiles[] = {
+    {"Default", defaultKeys},
     {"2XKO Default", twoXkoDefaultKeys},
 };
 
@@ -370,9 +373,9 @@ FgcResult ProfileStore::rename(const std::string& hardwareId, const std::string&
     if (upper(wideFrom) != upper(wideTo) && fs::exists(target, error)) {
         return FGC_ERR_ALREADY_EXISTS;
     }
-    // lastUsed() checks the file exists, so ask before the file moves.
+    // storedLastUsed() checks the file exists, so ask before the file moves.
     std::string last;
-    const bool wasLastUsed = lastUsed(hardwareId, last) && sameName(last, from);
+    const bool wasLastUsed = storedLastUsed(hardwareId, last) && sameName(last, from);
 
     fs::rename(source, target, error);
     if (error) {
@@ -394,9 +397,9 @@ FgcResult ProfileStore::remove(const std::string& hardwareId, const std::string&
         return FGC_ERR_READ_ONLY;
     }
 
-    // lastUsed() checks the file exists, so ask before it is deleted.
+    // storedLastUsed() checks the file exists, so ask before it is deleted.
     std::string last;
-    const bool wasLastUsed = lastUsed(hardwareId, last) && sameName(last, name);
+    const bool wasLastUsed = storedLastUsed(hardwareId, last) && sameName(last, name);
 
     std::error_code error;
     const bool removed = fs::remove(root_ / L"profiles" / directoryName / (wideName + L".json"), error);
@@ -413,6 +416,17 @@ FgcResult ProfileStore::remove(const std::string& hardwareId, const std::string&
 }
 
 bool ProfileStore::lastUsed(const std::string& hardwareId, std::string& name) const {
+    std::wstring directoryName;
+    if (!keyboardDirectoryName(hardwareId, directoryName)) {
+        return false;
+    }
+    if (!storedLastUsed(hardwareId, name)) {
+        name = kBuiltinProfiles[0].name;
+    }
+    return true;
+}
+
+bool ProfileStore::storedLastUsed(const std::string& hardwareId, std::string& name) const {
     json document;
     if (readJson(root_ / L"last_used.json", document) != FGC_OK || !document.is_object() ||
         !document.contains("profiles") || !document["profiles"].is_object()) {
