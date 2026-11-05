@@ -353,20 +353,23 @@ compute whether one more fits (`engine/controller_limit.cpp`):
 ```mermaid
 flowchart LR
     PF["Profile files<br/>%APPDATA%\FgcKeyboardSplitter\profiles"] -- "fgc_profile_load" --> CUR
-    BI["Built-in profiles<br/>compiled in, read-only"] -- "fgc_profile_load" --> CUR
-    DEF["Default mapping"] -- "no usable profile" --> CUR
+    BI["Built-in profiles<br/>compiled in, read-only<br/>Default, 2XKO Default"] -- "fgc_profile_load" --> CUR
     CUR["Current mapping per keyboard<br/>FgcContext::mappings"] -- "fgc_set_mapping" --> CUR
     CUR -- "fgc_profile_save" --> PF
     CUR -- "live swap if running" --> TAB["MappingTable of the running session"]
-    LU["last_used.json"] -. "chooses the profile on first use" .-> CUR
+    LU["last_used.json"] -. "chooses the profile on first use<br/>(Default when none is recorded)" .-> CUR
 ```
 
 - **The current mapping** of each keyboard lives in the context, may differ from any saved profile, and is what a
-  session starts with. The first time a keyboard is used it comes from its last-used profile, or the default mapping.
+  session starts with. The first time a keyboard is used it comes from its last-used profile. A keyboard with no
+  last-used profile, or whose last-used profile file is gone, starts from the built-in "Default" profile, and
+  `fgc_profile_get_last_used` reports "Default" for it.
 - **Profiles** are JSON files, one folder per keyboard `hardware_id`, plus `last_used.json`. Names follow Windows
   file-name rules and compare case-insensitively. The file format is documented in `fgc_core.h`.
-- **Built-in profiles** (such as "2XKO Default") are compiled in, listed first, and can be loaded but not saved over,
-  renamed or deleted.
+- **Built-in profiles** are compiled in, listed first in a fixed order, and can be loaded but not saved over, renamed
+  or deleted. "Default" is the mapping `fgc_get_default_mapping` returns (`defaultKeys()` in
+  `engine/mapping_table.cpp`); "2XKO Default" puts 2XKO's default keyboard layout on the buttons of its default arcade
+  stick layout. A profile file with a built-in name is hidden by the built-in.
 - Profiles are only read and written by control calls, never on the input path.
 
 ## Design decisions and trade-offs

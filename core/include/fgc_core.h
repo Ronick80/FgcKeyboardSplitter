@@ -240,8 +240,9 @@ FGC_API FgcResult fgc_set_mapping(FgcContext* context, const char* hardware_id, 
  * left_stick_left left_stick_right right_stick_up right_stick_down right_stick_left right_stick_right.
  * A missing binding is unbound; unknown names are ignored. A "version" above 1 is rejected.
  *
- * Every keyboard also has built-in profiles that are not stored as files: "2XKO Default" (2XKO's default
- * keyboard layout on the buttons of 2XKO's default arcade stick layout). They can be loaded and are remembered
+ * Every keyboard also has built-in profiles that are not stored as files: "Default" (the mapping
+ * fgc_get_default_mapping returns) and "2XKO Default" (2XKO's default keyboard layout on the buttons of 2XKO's
+ * default arcade stick layout). A keyboard with no last-used profile starts from "Default". They can be loaded and are remembered
  * as last used, but saving over, renaming or deleting one fails with FGC_ERR_READ_ONLY, and renaming a profile
  * to a built-in name fails with FGC_ERR_ALREADY_EXISTS. A profile file with a built-in name is ignored.
  */
@@ -266,7 +267,7 @@ FGC_API FgcResult fgc_profile_rename(FgcContext* context, const char* hardware_i
                                      const char* new_name);
 /* [control] */
 FGC_API FgcResult fgc_profile_delete(FgcContext* context, const char* hardware_id, const char* name);
-/* [control] Returns FGC_ERR_NOT_FOUND when the keyboard has no last-used profile. */
+/* [control] Returns "Default" when the keyboard has no last-used profile, or its profile file is gone. */
 FGC_API FgcResult fgc_profile_get_last_used(FgcContext* context, const char* hardware_id, char* out_name,
                                             uint32_t out_name_size);
 
